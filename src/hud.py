@@ -1,3 +1,4 @@
+import math
 import pygame
 import random
 from constants import BLOCK_SIZE, CHUNK_HEIGHT
@@ -9,6 +10,10 @@ PANEL_Y = 180
 ROW_H = 52
 HEADER_H = 44
 ICON_SIZE = 40
+
+# --- Event ticker layout ---
+TICKER_X, TICKER_Y = 32, 880
+TICKER_W, TICKER_H = 420, 90
 
 # (label, subtitle, atlas category, atlas name, icon scale, is_new)
 # Labels deliberately carry no "!" prefix: that is Streamer.bot trigger
@@ -200,6 +205,44 @@ class Hud:
         surf = render_text_with_outline(f"{self.sub_count:,} subs", self.font,
                                         (255, 255, 255), (0, 0, 0), 2)
         screen.blit(surf, (x + 36, y - 4))
+
+    def draw_event_ticker(self, screen, events):
+        """Render the active or incoming event. Nothing is drawn while idle."""
+        if events.phase == "idle":
+            return
+
+        box = pygame.Surface((TICKER_W, TICKER_H), pygame.SRCALPHA)
+        box.fill((12, 12, 16, 200))
+        screen.blit(box, (TICKER_X, TICKER_Y))
+        pygame.draw.rect(screen, events.color,
+                         (TICKER_X, TICKER_Y, TICKER_W, TICKER_H), 3)
+
+        if events.phase == "warning":
+            # Same sine-brightness pulse the TNT fuse uses.
+            period = 600
+            t = pygame.time.get_ticks() % period
+            brightness = (math.sin(t / period * 2 * math.pi) + 1) / 2
+            col = tuple(int(c * (0.4 + 0.6 * brightness)) for c in events.color)
+            label = render_text_with_outline(f"{events.name} INCOMING",
+                                             self.panel_font, col, (0, 0, 0), 2)
+            screen.blit(label, (TICKER_X + 12, TICKER_Y + 28))
+            return
+
+        label = render_text_with_outline(events.name, self.panel_font,
+                                         events.color, (0, 0, 0), 2)
+        screen.blit(label, (TICKER_X + 12, TICKER_Y + 6))
+
+        secs = (events.remaining_ms() + 999) // 1000
+        secs_surf = render_text_with_outline(f"{secs}s", self.panel_font,
+                                             (255, 255, 255), (0, 0, 0), 2)
+        screen.blit(secs_surf,
+                    (TICKER_X + TICKER_W - secs_surf.get_width() - 12, TICKER_Y + 6))
+
+        bar_x, bar_y = TICKER_X + 12, TICKER_Y + 54
+        bar_w, bar_h = TICKER_W - 24, 22
+        pygame.draw.rect(screen, (50, 50, 58), (bar_x, bar_y, bar_w, bar_h))
+        filled = int(bar_w * (1.0 - events.progress()))
+        pygame.draw.rect(screen, events.color, (bar_x, bar_y, filled, bar_h))
 
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):
         """

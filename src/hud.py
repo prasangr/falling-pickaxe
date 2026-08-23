@@ -87,6 +87,9 @@ class Hud:
         # Multiplied by the GOLD FEVER event; 1 means normal drops.
         self.ore_multiplier = 1
 
+        # Set from main.py. Zero means "not configured" and renders nothing.
+        self.sub_count = 0
+
         self.position = position
         self.icon_size = (64, 64)  # Size to draw each icon
         self.spacing = 15  # Space between items
@@ -184,6 +187,20 @@ class Hud:
             self._panel_row(screen, PANEL_X, y, label)
             y += ROW_H
 
+    def draw_sub_count(self, screen):
+        # Zero means hidden: a streamer who never set SUB_COUNT_BASE gets a
+        # clean screen rather than an embarrassing "0".
+        if not self.sub_count:
+            return
+        x, y = 32, 1000
+        # Drawn triangle rather than a glyph -- the default pygame font has
+        # no reliable play-symbol codepoint.
+        pygame.draw.polygon(screen, (255, 0, 0),
+                            [(x, y + 4), (x, y + 34), (x + 26, y + 19)])
+        surf = render_text_with_outline(f"{self.sub_count:,} subs", self.font,
+                                        (255, 255, 255), (0, 0, 0), 2)
+        screen.blit(surf, (x + 36, y - 4))
+
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):
         """
         Draws the HUD: each ore icon with its amount and other indicators.
@@ -234,6 +251,6 @@ class Hud:
         screen.blit(fast_slow_surface, (fast_slow_x, fast_slow_y))
 
         self.draw_command_panel(screen)
+        self.draw_sub_count(screen)
 
-            
 

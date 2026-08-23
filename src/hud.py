@@ -2,6 +2,47 @@ import pygame
 import random
 from constants import BLOCK_SIZE, CHUNK_HEIGHT
 
+# --- Command panel layout, in internal-surface pixels (1080 x 1920) ---
+PANEL_X = 756
+PANEL_W = 300
+PANEL_Y = 180
+ROW_H = 52
+HEADER_H = 44
+ICON_SIZE = 40
+
+# (label, subtitle, atlas category, atlas name, icon scale, is_new)
+# Labels deliberately carry no "!" prefix: that is Streamer.bot trigger
+# syntax and only adds noise at Shorts resolution.
+COMMAND_ROWS = [
+    ("TNT",       "SPAWN 1 TNT",         "block",   "tnt",               1.0, False),
+    ("NUKE",      "GIANT PICK + 30 TNT", "block",   "mega_tnt",          1.0, True),
+    ("BIG",       "GIANT PICKAXE",       "pickaxe", "wooden_pickaxe",    1.4, False),
+    ("FAST",      "SPEED UP 5S",         "chevron", "right",             1.0, False),
+    ("SLOW",      "SLOW DOWN 5S",        "chevron", "left",              1.0, False),
+    ("DIAMOND",   "DIAMOND SKIN 30S",    "pickaxe", "diamond_pickaxe",   1.0, False),
+    ("GOLD",      "GOLD SKIN 30S",       "pickaxe", "golden_pickaxe",    1.0, False),
+    ("IRON",      "IRON SKIN 30S",       "pickaxe", "iron_pickaxe",      1.0, False),
+    ("STONE",     "STONE SKIN 30S",      "pickaxe", "stone_pickaxe",     1.0, False),
+    ("NETHERITE", "BEST SKIN 30S",       "pickaxe", "netherite_pickaxe", 1.0, False),
+]
+
+
+def make_chevron(direction, size, color):
+    """A double chevron, drawn rather than loaded — two triangles need no PNG."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    for i in (0, 1):
+        off = i * size * 0.42
+        if direction == "right":
+            pts = [(off, size * 0.15),
+                   (off + size * 0.42, size * 0.5),
+                   (off, size * 0.85)]
+        else:
+            pts = [(size - off, size * 0.15),
+                   (size - off - size * 0.42, size * 0.5),
+                   (size - off, size * 0.85)]
+        pygame.draw.polygon(surf, color, pts)
+    return surf
+
 def render_text_with_outline(text, font, text_color, outline_color, outline_width=2):
     # Render the text in the main color.
     text_surface = font.render(text, True, text_color)
@@ -53,6 +94,20 @@ class Hud:
         # Initialize a font (using the default font and size 24)
         self.font = pygame.font.Font(None, 64)
 
+        self.panel_font = pygame.font.Font(None, 40)
+        self.small_font = pygame.font.Font(None, 24)
+
+        # Icons are cut and downscaled once here, never per frame. The atlas
+        # arrives already scaled by BLOCK_SCALE_FACTOR (~7.5x).
+        self.icons = {}
+        for label, _sub, cat, name, scale, _new in COMMAND_ROWS:
+            px = int(ICON_SIZE * scale)
+            if cat == "chevron":
+                self.icons[label] = make_chevron(name, px, (235, 235, 235))
+            else:
+                src = texture_atlas.subsurface(pygame.Rect(atlas_items[cat][name]))
+                self.icons[label] = pygame.transform.smoothscale(src, (px, px))
+
     def update_amounts(self, new_amounts):
         """
         Update the ore amounts.
@@ -63,6 +118,46 @@ class Hud:
     def add_ore(self, key, lo, hi):
         """Credit an ore drop, applying the active event multiplier."""
         self.amounts[key] += random.randint(lo, hi) * self.ore_multiplier
+
+    def _panel_box(self, screen, x, y, w, h, title, accent=(255, 255, 255)):
+        box = pygame.Surface((w, h), pygame.SRCALPHA)
+        box.fill((12, 12, 16, 200))
+        screen.blit(box, (x, y))
+        pygame.draw.rect(screen, accent, (x, y, w, h), 3)
+        t = render_text_with_outline(title, self.panel_font, accent, (0, 0, 0), 2)
+        screen.blit(t, (x + (w - t.get_width()) // 2, y + 4))
+
+    def _panel_row(self, screen, x, y, label, subtitle):
+        icon = self.icons[label]
+        # BIG renders at 1.4x and overflows its box on purpose.
+        ix = x + 12 + (ICON_SIZE - icon.get_width()) // 2
+        iy = y + (ROW_H - icon.get_height()) // 2
+        screen.blit(icon, (ix, iy))
+
+        tx = x + 12 + ICON_SIZE + 8
+        lab = render_text_with_outline(label, self.panel_font, (255, 255, 255), (0, 0, 0), 2)
+        screen.blit(lab, (tx, y + 2))
+        sub = render_text_with_outline(subtitle, self.small_font, (170, 170, 180), (0, 0, 0), 1)
+        screen.blit(sub, (tx, y + lab.get_height() - 2))
+
+    def draw_command_panel(self, screen):
+        height = HEADER_H + len(COMMAND_ROWS) * ROW_H
+        self._panel_box(screen, PANEL_X, PANEL_Y, PANEL_W, height, "COMMANDS")
+        y = PANEL_Y + HEADER_H
+        for label, subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
+            self._panel_row(screen, PANEL_X, y, label, subtitle)
+            y += ROW_H
+
+        new_rows = [r for r in COMMAND_ROWS if r[5]]
+        if not new_rows:
+            return
+        ny = PANEL_Y + height + 36
+        nh = HEADER_H + len(new_rows) * ROW_H
+        self._panel_box(screen, PANEL_X, ny, PANEL_W, nh, "NEW COMMAND", accent=(255, 215, 0))
+        y = ny + HEADER_H
+        for label, subtitle, _cat, _name, _scale, _new in new_rows:
+            self._panel_row(screen, PANEL_X, y, label, subtitle)
+            y += ROW_H
 
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):
         """
@@ -112,6 +207,8 @@ class Hud:
         fast_slow_x = x + self.spacing
         fast_slow_y = y + 2 * self.spacing + fast_slow_surface.get_height()
         screen.blit(fast_slow_surface, (fast_slow_x, fast_slow_y))
+
+        self.draw_command_panel(screen)
 
             
 

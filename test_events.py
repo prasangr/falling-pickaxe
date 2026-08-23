@@ -231,6 +231,49 @@ def test_two_consecutive_cycles_do_not_overlap():
     assert mgr.phase == events.IDLE, mgr.phase
 
 
+def test_disabled_mid_active_restores_and_returns_to_idle():
+    """When disabled while ACTIVE, update() must restore effects and return to IDLE."""
+    import events
+
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("TNT STORM", hud)
+    assert mgr.phase == events.ACTIVE
+    assert mgr.tnt_storm is True
+
+    # Now disable while active
+    mgr.enabled = False
+    mgr.update(hud)
+
+    # Should have restored and returned to IDLE
+    assert mgr.phase == events.IDLE, mgr.phase
+    assert mgr.tnt_storm is False, mgr.tnt_storm
+    assert mgr.speed_override is None
+    assert hud.ore_multiplier == 1, hud.ore_multiplier
+
+
+def test_restore_clears_all_flags_not_just_active_event():
+    """_restore() must clear ALL flags, not just the one set by the active event."""
+    import events
+
+    hud = FakeHud()
+    # Dirty the flags with values NOT set by SLOW MOTION
+    hud.ore_multiplier = 7
+    mgr, clock = _run_full_cycle("SLOW MOTION", hud)
+    mgr.tnt_storm = True  # Set a flag the SLOW MOTION event didn't set
+    assert mgr.speed_override == "Slow"
+    assert mgr.tnt_storm is True
+    assert hud.ore_multiplier == 7
+
+    # Complete the cycle
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+
+    # All flags should be cleared
+    assert mgr.tnt_storm is False, mgr.tnt_storm
+    assert mgr.speed_override is None, mgr.speed_override
+    assert hud.ore_multiplier == 1, hud.ore_multiplier
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

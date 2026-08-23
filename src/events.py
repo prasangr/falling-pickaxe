@@ -88,6 +88,11 @@ class EventManager:
 
     def update(self, hud):
         if not self.enabled:
+            # If disabled while effects are applied, restore them immediately
+            # and return to IDLE. Subsequent disabled calls are then a cheap no-op.
+            if self.phase == ACTIVE:
+                self._restore(hud)
+                self._schedule_next()
             return
 
         now = self.clock()

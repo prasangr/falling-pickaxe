@@ -14,3 +14,5 @@ logs/
 # Reference screenshots, not project assets
 Screenshot*.png
 preview-current.png
+preview-live.png
+preview-phone.png

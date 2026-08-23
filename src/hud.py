@@ -4,12 +4,14 @@ import random
 from constants import BLOCK_SIZE, CHUNK_HEIGHT
 
 # --- Command panel layout, in internal-surface pixels (1080 x 1920) ---
-PANEL_X = 756
-PANEL_W = 300
+# Sized for Shorts: viewers watch on a phone, so the panel is tuned to stay
+# legible after the 1080x1920 surface is scaled down to a handset viewport.
+PANEL_X = 700
+PANEL_W = 360
 PANEL_Y = 180
-ROW_H = 52
-HEADER_H = 44
-ICON_SIZE = 40
+ROW_H = 64
+HEADER_H = 48
+ICON_SIZE = 46
 
 # --- Event ticker layout ---
 TICKER_X, TICKER_Y = 32, 880
@@ -18,18 +20,37 @@ TICKER_W, TICKER_H = 420, 90
 # (label, subtitle, atlas category, atlas name, icon scale, is_new)
 # Labels deliberately carry no "!" prefix: that is Streamer.bot trigger
 # syntax and only adds noise at Shorts resolution.
+# Subtitles are kept short on purpose: the label above already names the
+# command, so repeating it ("DIAMOND" / "DIAMOND SKIN 30S") only costs width
+# that the subtitle needs in order to be readable on a phone.
 COMMAND_ROWS = [
-    ("TNT",       "SPAWN 1 TNT",         "block",   "tnt",               1.0, False),
-    ("NUKE",      "GIANT PICK + 30 TNT", "block",   "mega_tnt",          1.0, True),
-    ("BIG",       "GIANT PICKAXE",       "pickaxe", "wooden_pickaxe",    1.4, False),
-    ("FAST",      "SPEED UP 5S",         "chevron", "right",             1.0, False),
-    ("SLOW",      "SLOW DOWN 5S",        "chevron", "left",              1.0, False),
-    ("DIAMOND",   "DIAMOND SKIN 30S",    "pickaxe", "diamond_pickaxe",   1.0, False),
-    ("GOLD",      "GOLD SKIN 30S",       "pickaxe", "golden_pickaxe",    1.0, False),
-    ("IRON",      "IRON SKIN 30S",       "pickaxe", "iron_pickaxe",      1.0, False),
-    ("STONE",     "STONE SKIN 30S",      "pickaxe", "stone_pickaxe",     1.0, False),
-    ("NETHERITE", "BEST SKIN 30S",       "pickaxe", "netherite_pickaxe", 1.0, False),
+    ("TNT",       "SPAWN 1 TNT",       "block",   "tnt",               1.0, False),
+    ("NUKE",      "BIG PICK + 30 TNT", "block",   "mega_tnt",          1.0, True),
+    ("BIG",       "GIANT PICKAXE",     "pickaxe", "wooden_pickaxe",    1.4, False),
+    ("FAST",      "SPEED UP 5S",       "chevron", "right",             1.0, False),
+    ("SLOW",      "SLOW DOWN 5S",      "chevron", "left",              1.0, False),
+    ("DIAMOND",   "SKIN 30S",          "pickaxe", "diamond_pickaxe",   1.0, False),
+    ("GOLD",      "SKIN 30S",          "pickaxe", "golden_pickaxe",    1.0, False),
+    ("IRON",      "SKIN 30S",          "pickaxe", "iron_pickaxe",      1.0, False),
+    ("STONE",     "SKIN 30S",          "pickaxe", "stone_pickaxe",     1.0, False),
+    ("NETHERITE", "BEST SKIN 30S",     "pickaxe", "netherite_pickaxe", 1.0, False),
 ]
+
+# The five pickaxe icons are near-identical silhouettes at panel size, so the
+# LABEL carries the distinction instead — colour reads instantly where a 46px
+# sprite does not. Tuned to each material.
+LABEL_COLORS = {
+    "TNT":       (255, 255, 255),
+    "NUKE":      (255, 120,  90),
+    "BIG":       (255, 255, 255),
+    "FAST":      (130, 235, 130),
+    "SLOW":      (110, 200, 240),
+    "DIAMOND":   ( 85, 225, 225),
+    "GOLD":      (255, 205,  60),
+    "IRON":      (225, 225, 235),
+    "STONE":     (175, 175, 175),
+    "NETHERITE": (190, 145, 230),
+}
 
 
 def make_chevron(direction, size, color):
@@ -102,8 +123,8 @@ class Hud:
         # Initialize a font (using the default font and size 24)
         self.font = pygame.font.Font(None, 64)
 
-        self.panel_font = pygame.font.Font(None, 40)
-        self.small_font = pygame.font.Font(None, 24)
+        self.panel_font = pygame.font.Font(None, 46)
+        self.small_font = pygame.font.Font(None, 30)
 
         # Icons are cut and downscaled once here, never per frame. The atlas
         # arrives already scaled by BLOCK_SCALE_FACTOR (~7.5x).
@@ -124,8 +145,9 @@ class Hud:
 
         self.label_texts = {}  # label -> (label_surface, subtitle_surface)
         for label, subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
-            lab = render_text_with_outline(label, self.panel_font, (255, 255, 255), (0, 0, 0), 2)
-            sub = render_text_with_outline(subtitle, self.small_font, (170, 170, 180), (0, 0, 0), 1)
+            color = LABEL_COLORS.get(label, (255, 255, 255))
+            lab = render_text_with_outline(label, self.panel_font, color, (0, 0, 0), 2)
+            sub = render_text_with_outline(subtitle, self.small_font, (195, 195, 205), (0, 0, 0), 2)
             self.label_texts[label] = (lab, sub)
 
         # Cache filled background surfaces for panels (sized for their content).
@@ -170,8 +192,11 @@ class Hud:
 
         tx = x + 12 + ICON_SIZE + 8
         lab, sub = self.label_texts[label]
-        screen.blit(lab, (tx, y + 2))
-        screen.blit(sub, (tx, y + lab.get_height() - 2))
+        # The two lines nest tightly inside ROW_H; the overlap pulls the
+        # subtitle up into the label's outline padding rather than letting
+        # consecutive rows touch.
+        screen.blit(lab, (tx, y + 1))
+        screen.blit(sub, (tx, y + lab.get_height() - 9))
 
     def draw_command_panel(self, screen):
         height = HEADER_H + len(COMMAND_ROWS) * ROW_H

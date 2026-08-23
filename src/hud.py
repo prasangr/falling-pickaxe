@@ -1,4 +1,5 @@
 import pygame
+import random
 from constants import BLOCK_SIZE, CHUNK_HEIGHT
 
 def render_text_with_outline(text, font, text_color, outline_color, outline_width=2):
@@ -42,6 +43,9 @@ class Hud:
             "emerald": 0,
         }
 
+        # Multiplied by the GOLD FEVER event; 1 means normal drops.
+        self.ore_multiplier = 1
+
         self.position = position
         self.icon_size = (64, 64)  # Size to draw each icon
         self.spacing = 15  # Space between items
@@ -55,6 +59,10 @@ class Hud:
         :param new_amounts: Dict with ore names as keys and integer amounts as values.
         """
         self.amounts.update(new_amounts)
+
+    def add_ore(self, key, lo, hi):
+        """Credit an ore drop, applying the active event multiplier."""
+        self.amounts[key] += random.randint(lo, hi) * self.ore_multiplier
 
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):
         """

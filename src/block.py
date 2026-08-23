@@ -1,7 +1,20 @@
 import pygame
 import pymunk
 from constants import BLOCK_SIZE
-import random 
+import random
+
+# Block name -> (HUD counter key, min drop, max drop).
+# Quantities preserve the original per-ore behaviour exactly.
+ORE_DROPS = {
+    "coal_ore":     ("coal", 1, 1),
+    "iron_ore":     ("iron_ingot", 1, 1),
+    "copper_ore":   ("copper_ingot", 1, 1),
+    "gold_ore":     ("gold_ingot", 1, 1),
+    "diamond_ore":  ("diamond", 1, 1),
+    "emerald_ore":  ("emerald", 1, 1),
+    "redstone_ore": ("redstone", 4, 5),
+    "lapis_ore":    ("lapis_lazuli", 4, 8),
+}
 
 class Block:
     def __init__(self, space, x, y, name, texture_atlas, atlas_items):
@@ -112,22 +125,9 @@ class Block:
             self.destroyed = True
             space.remove(self.body, self.shape)  # Remove from physics world
 
-            if self.name == "coal_ore":
-                hud.amounts["coal"] += 1  # Add to HUD amounts
-            elif self.name == "iron_ore":
-                hud.amounts["iron_ingot"] += 1  # Add to HUD amounts
-            elif self.name == "copper_ore":
-                hud.amounts["copper_ingot"] += 1  # Add to HUD amounts
-            elif self.name == "gold_ore":
-                hud.amounts["gold_ingot"] += 1  # Add to HUD amounts
-            elif self.name == "diamond_ore":
-                hud.amounts["diamond"] += 1  # Add to HUD amounts
-            elif self.name == "emerald_ore":
-                hud.amounts["emerald"] += 1  # Add to HUD amounts
-            elif self.name == "redstone_ore":
-                hud.amounts["redstone"] += random.randint(4, 5)  # Add to HUD amounts
-            elif self.name == "lapis_ore":
-                hud.amounts["lapis_lazuli"] += random.randint(4, 8)  # Add to HUD amounts
+            drop = ORE_DROPS.get(self.name)
+            if drop:
+                hud.add_ore(*drop)
 
     def draw(self, screen, camera):
         """Draw block at its position"""

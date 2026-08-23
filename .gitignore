@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Runtime IPC file — Streamer.bot writes here, the game clears it.
+# main.py recreates it on launch if missing.
+commands.txt
+
+# Chat logs written by youtube.py
+logs/
+
+# Reference screenshots, not project assets
+Screenshot*.png

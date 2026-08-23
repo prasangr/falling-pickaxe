@@ -339,7 +339,9 @@ def game():
             exp.draw(internal_surface, camera)
         explosions = [e for e in explosions if e.particles]
 
-        hud.sub_count = stream_stats["subs"]
+        # Zero keeps the counter hidden (see Hud.draw_sub_count). Flip
+        # SHOW_SUB_COUNT to true in config.json to put it back on screen.
+        hud.sub_count = stream_stats["subs"] if config.get("SHOW_SUB_COUNT", False) else 0
         hud.draw(internal_surface, pickaxe.body.position.y,
                  speed_mode is not None, speed_mode or "Normal")
         hud.draw_event_ticker(internal_surface, events)

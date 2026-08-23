@@ -108,6 +108,32 @@ class Hud:
                 src = texture_atlas.subsurface(pygame.Rect(atlas_items[cat][name]))
                 self.icons[label] = pygame.transform.smoothscale(src, (px, px))
 
+        # Cache all static text surfaces rendered once at init, never per frame.
+        self.panel_texts = {
+            'COMMANDS_title': render_text_with_outline('COMMANDS', self.panel_font, (255, 255, 255), (0, 0, 0), 2),
+            'NEW_COMMAND_title': render_text_with_outline('NEW COMMAND', self.panel_font, (255, 215, 0), (0, 0, 0), 2),
+        }
+
+        self.label_texts = {}  # label -> (label_surface, subtitle_surface)
+        for label, subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
+            lab = render_text_with_outline(label, self.panel_font, (255, 255, 255), (0, 0, 0), 2)
+            sub = render_text_with_outline(subtitle, self.small_font, (170, 170, 180), (0, 0, 0), 1)
+            self.label_texts[label] = (lab, sub)
+
+        # Cache filled background surfaces for panels (sized for their content).
+        commands_height = HEADER_H + len(COMMAND_ROWS) * ROW_H
+        new_rows = [r for r in COMMAND_ROWS if r[5]]
+        new_height = HEADER_H + len(new_rows) * ROW_H
+
+        self.panel_boxes = {}
+        commands_bg = pygame.Surface((PANEL_W, commands_height), pygame.SRCALPHA)
+        commands_bg.fill((12, 12, 16, 200))
+        self.panel_boxes['COMMANDS'] = commands_bg
+
+        new_bg = pygame.Surface((PANEL_W, new_height), pygame.SRCALPHA)
+        new_bg.fill((12, 12, 16, 200))
+        self.panel_boxes['NEW_COMMAND'] = new_bg
+
     def update_amounts(self, new_amounts):
         """
         Update the ore amounts.
@@ -119,15 +145,15 @@ class Hud:
         """Credit an ore drop, applying the active event multiplier."""
         self.amounts[key] += random.randint(lo, hi) * self.ore_multiplier
 
-    def _panel_box(self, screen, x, y, w, h, title, accent=(255, 255, 255)):
-        box = pygame.Surface((w, h), pygame.SRCALPHA)
-        box.fill((12, 12, 16, 200))
+    def _panel_box(self, screen, x, y, w, h, title_key, accent=(255, 255, 255)):
+        # Blit cached background and title, draw border
+        box = self.panel_boxes[title_key]
         screen.blit(box, (x, y))
         pygame.draw.rect(screen, accent, (x, y, w, h), 3)
-        t = render_text_with_outline(title, self.panel_font, accent, (0, 0, 0), 2)
+        t = self.panel_texts[title_key + '_title']
         screen.blit(t, (x + (w - t.get_width()) // 2, y + 4))
 
-    def _panel_row(self, screen, x, y, label, subtitle):
+    def _panel_row(self, screen, x, y, label):
         icon = self.icons[label]
         # BIG renders at 1.4x and overflows its box on purpose.
         ix = x + 12 + (ICON_SIZE - icon.get_width()) // 2
@@ -135,17 +161,16 @@ class Hud:
         screen.blit(icon, (ix, iy))
 
         tx = x + 12 + ICON_SIZE + 8
-        lab = render_text_with_outline(label, self.panel_font, (255, 255, 255), (0, 0, 0), 2)
+        lab, sub = self.label_texts[label]
         screen.blit(lab, (tx, y + 2))
-        sub = render_text_with_outline(subtitle, self.small_font, (170, 170, 180), (0, 0, 0), 1)
         screen.blit(sub, (tx, y + lab.get_height() - 2))
 
     def draw_command_panel(self, screen):
         height = HEADER_H + len(COMMAND_ROWS) * ROW_H
-        self._panel_box(screen, PANEL_X, PANEL_Y, PANEL_W, height, "COMMANDS")
+        self._panel_box(screen, PANEL_X, PANEL_Y, PANEL_W, height, 'COMMANDS')
         y = PANEL_Y + HEADER_H
-        for label, subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
-            self._panel_row(screen, PANEL_X, y, label, subtitle)
+        for label, _subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
+            self._panel_row(screen, PANEL_X, y, label)
             y += ROW_H
 
         new_rows = [r for r in COMMAND_ROWS if r[5]]
@@ -153,10 +178,10 @@ class Hud:
             return
         ny = PANEL_Y + height + 36
         nh = HEADER_H + len(new_rows) * ROW_H
-        self._panel_box(screen, PANEL_X, ny, PANEL_W, nh, "NEW COMMAND", accent=(255, 215, 0))
+        self._panel_box(screen, PANEL_X, ny, PANEL_W, nh, 'NEW_COMMAND', accent=(255, 215, 0))
         y = ny + HEADER_H
-        for label, subtitle, _cat, _name, _scale, _new in new_rows:
-            self._panel_row(screen, PANEL_X, y, label, subtitle)
+        for label, _subtitle, _cat, _name, _scale, _new in new_rows:
+            self._panel_row(screen, PANEL_X, y, label)
             y += ROW_H
 
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):

@@ -19,6 +19,7 @@ import threading
 import random
 import os  # Needed for file operations
 from hud import Hud
+from events import EventManager
 
 # Track key states
 key_t_pressed = False
@@ -31,6 +32,10 @@ fast_slow_queue = []
 big_queue = []
 pickaxe_queue = []
 mega_tnt_queue = []
+
+# Live stream stats shown on the HUD. Seeded from config, incremented by
+# SUB lines, and overridden absolutely by SUBS lines.
+stream_stats = {"subs": config.get("SUB_COUNT_BASE", 0)}
 
 # ==========================================
 # FILE WATCHER (The Listener)
@@ -70,6 +75,14 @@ def check_command_file():
                 tnt_queue.append(user)
             elif command == "SUB":
                 mega_tnt_queue.append(user)
+                stream_stats["subs"] += 1
+            elif command == "SUBS":
+                # Optional absolute sync, e.g. "SUBS:system:165909".
+                # A malformed count is ignored; the baseline stands.
+                try:
+                    stream_stats["subs"] = int(value)
+                except ValueError:
+                    print(f"Ignoring malformed SUBS value: {value!r}")
             elif command == "SUPER":
                 tnt_superchat_queue.append((user, value))
             elif command == "SPEED":
@@ -179,6 +192,12 @@ def game():
     
     camera = Camera()
     hud = Hud(texture_atlas, atlas_items)
+    events = EventManager(
+        interval_min_s=config.get("EVENT_INTERVAL_SECONDS_MIN", 60),
+        interval_max_s=config.get("EVENT_INTERVAL_SECONDS_MAX", 90),
+        enabled=config.get("EVENTS_ENABLED", True),
+    )
+    last_storm_spawn = pygame.time.get_ticks()
     explosions = []
     
     # File Check Timer
@@ -201,10 +220,11 @@ def game():
                 screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
 
         # Physics Step
+        # An active event outranks a chat-triggered speed change.
+        speed_mode = events.speed_override or (fast_slow if fast_slow_active else None)
         step = 1/FRAMERATE
-        if fast_slow_active:
-            if fast_slow == "Fast": step = 1/(FRAMERATE/2)
-            else: step = 1/(FRAMERATE*2)
+        if speed_mode == "Fast": step = 1/(FRAMERATE/2)
+        elif speed_mode == "Slow": step = 1/(FRAMERATE*2)
         space.step(step)
 
         # Logic
@@ -221,6 +241,15 @@ def game():
 
         # ------------------ SPAWN LOGIC ------------------
         curr = pygame.time.get_ticks()
+
+        events.update(hud)
+
+        if events.tnt_storm and curr - last_storm_spawn >= 300:
+            tnt_list.append(Tnt(space, pickaxe.body.position.x,
+                                pickaxe.body.position.y - 100,
+                                texture_atlas, atlas_items, sound_manager,
+                                owner_name="TNT STORM"))
+            last_storm_spawn = curr
 
         # Auto Spawn (Only if Chat Control FALSE)
         if not config["CHAT_CONTROL"] and curr - last_tnt_spawn >= tnt_spawn_interval:
@@ -310,7 +339,10 @@ def game():
             exp.draw(internal_surface, camera)
         explosions = [e for e in explosions if e.particles]
 
-        hud.draw(internal_surface, pickaxe.body.position.y, fast_slow_active, fast_slow)
+        hud.sub_count = stream_stats["subs"]
+        hud.draw(internal_surface, pickaxe.body.position.y,
+                 speed_mode is not None, speed_mode or "Normal")
+        hud.draw_event_ticker(internal_surface, events)
 
         scaled_surface = pygame.transform.smoothscale(internal_surface, (window_width, window_height))
         screen.blit(scaled_surface, (0,0))

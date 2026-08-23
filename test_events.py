@@ -147,6 +147,90 @@ def test_progress_runs_zero_to_one_across_active():
     assert abs(mgr.progress() - 0.5) < 0.01, mgr.progress()
 
 
+def _run_full_cycle(event_name, hud):
+    """Drive one event from idle through active and back to idle."""
+    import events
+
+    mgr, clock = _manager(event_name)
+    clock.advance(60000)
+    mgr.update(hud)                       # -> warning
+    clock.advance(events.WARNING_MS)
+    mgr.update(hud)                       # -> active
+    return mgr, clock
+
+
+def test_slow_motion_sets_and_clears_speed_override():
+    import events
+
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("SLOW MOTION", hud)
+    assert mgr.speed_override == "Slow", mgr.speed_override
+
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+    assert mgr.speed_override is None, mgr.speed_override
+
+
+def test_tnt_storm_sets_and_clears_flag():
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("TNT STORM", hud)
+    assert mgr.tnt_storm is True
+
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+    assert mgr.tnt_storm is False
+
+
+def test_gold_fever_sets_and_clears_multiplier():
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("GOLD FEVER", hud)
+    assert hud.ore_multiplier == 3, hud.ore_multiplier
+
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+    assert hud.ore_multiplier == 1, hud.ore_multiplier
+
+
+def test_ore_rush_swaps_and_restores_noise_ranges():
+    import chunk as chunk_module
+
+    original = chunk_module.noise_ranges
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("ORE RUSH", hud)
+    assert chunk_module.noise_ranges is not original
+
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+    assert chunk_module.noise_ranges is original, "noise_ranges not restored"
+
+
+def test_ore_rush_weights_exclude_hard_filler_blocks():
+    import events
+
+    for excluded in ("obsidian", "diorite", "granite", "mossy_cobblestone"):
+        assert excluded not in events.ORE_RUSH_WEIGHTS, excluded
+    assert events.ORE_RUSH_WEIGHTS["diamond_ore"] > events.ORE_RUSH_WEIGHTS["stone"]
+
+
+def test_two_consecutive_cycles_do_not_overlap():
+    """The second event must not start while the first is still active."""
+    import events
+
+    hud = FakeHud()
+    mgr, clock = _run_full_cycle("TNT STORM", hud)
+    assert mgr.phase == events.ACTIVE
+
+    clock.advance(mgr.event["duration_ms"])
+    mgr.update(hud)
+    assert mgr.phase == events.IDLE, mgr.phase
+    assert mgr.tnt_storm is False
+
+    # Nothing fires again until a fresh gap has elapsed.
+    clock.advance(59999)
+    mgr.update(hud)
+    assert mgr.phase == events.IDLE, mgr.phase
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

@@ -7,6 +7,9 @@ import random
 
 import pygame
 
+import chunk as chunk_module
+from chunk import generate_noise_ranges
+
 IDLE = "idle"
 WARNING = "warning"
 ACTIVE = "active"
@@ -19,6 +22,16 @@ EVENTS = [
     {"name": "SLOW MOTION", "duration_ms": 10000, "color": ( 80, 210, 235)},
     {"name": "GOLD FEVER",  "duration_ms": 20000, "color": (250, 230,  90)},
 ]
+
+# Ore-heavy world generation for the ORE RUSH event. Blocks absent from
+# this table simply do not generate while the event runs; obsidian is
+# excluded deliberately because its 100 HP would blunt the payoff.
+ORE_RUSH_WEIGHTS = {
+    "stone": 5, "andesite": 3, "cobblestone": 3,
+    "coal_ore": 15, "iron_ore": 15, "copper_ore": 12,
+    "gold_ore": 12, "redstone_ore": 12, "lapis_ore": 10,
+    "diamond_ore": 8, "emerald_ore": 5,
+}
 
 
 class EventManager:
@@ -95,7 +108,23 @@ class EventManager:
     # ---------- effects (filled in by Task 3) ----------
 
     def _apply(self, hud):
-        pass
+        name = self.event["name"]
+        if name == "ORE RUSH":
+            self._saved_noise_ranges = chunk_module.noise_ranges
+            chunk_module.noise_ranges = generate_noise_ranges(ORE_RUSH_WEIGHTS)
+        elif name == "TNT STORM":
+            self.tnt_storm = True
+        elif name == "SLOW MOTION":
+            self.speed_override = "Slow"
+        elif name == "GOLD FEVER":
+            hud.ore_multiplier = 3
 
     def _restore(self, hud):
-        pass
+        # Everything is cleared unconditionally, not just the flag the
+        # active event set. A leaked flag strands a live stream.
+        if self._saved_noise_ranges is not None:
+            chunk_module.noise_ranges = self._saved_noise_ranges
+            self._saved_noise_ranges = None
+        self.tnt_storm = False
+        self.speed_override = None
+        hud.ore_multiplier = 1

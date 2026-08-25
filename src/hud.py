@@ -6,34 +6,39 @@ from constants import BLOCK_SIZE, CHUNK_HEIGHT
 # --- Command panel layout, in internal-surface pixels (1080 x 1920) ---
 # Sized for Shorts: viewers watch on a phone, so the panel is tuned to stay
 # legible after the 1080x1920 surface is scaled down to a handset viewport.
-PANEL_X = 700
-PANEL_W = 360
-PANEL_Y = 180
-ROW_H = 64
+PANEL_X = 730
+PANEL_W = 340
+PANEL_Y = 50
+ROW_H = 52
 HEADER_H = 48
 ICON_SIZE = 46
 
 # --- Event ticker layout ---
 TICKER_X, TICKER_Y = 32, 880
+
+# Centred alert banner (lava burn), high enough to clear the ticker.
+ALERT_Y = 1180
 TICKER_W, TICKER_H = 420, 90
 
-# (label, subtitle, atlas category, atlas name, icon scale, is_new)
+# (label, atlas category, atlas name, icon scale, is_new)
 # Labels deliberately carry no "!" prefix: that is Streamer.bot trigger
-# syntax and only adds noise at Shorts resolution.
-# Subtitles are kept short on purpose: the label above already names the
-# command, so repeating it ("DIAMOND" / "DIAMOND SKIN 30S") only costs width
-# that the subtitle needs in order to be readable on a phone.
+# syntax and only adds noise at Shorts resolution. No description line
+# either -- the icon and the name carry it, and viewers work the rest out
+# from chat.
 COMMAND_ROWS = [
-    ("TNT",       "SPAWN 1 TNT",       "block",   "tnt",               1.0, False),
-    ("NUKE",      "BIG PICK + 30 TNT", "block",   "mega_tnt",          1.0, True),
-    ("BIG",       "GIANT PICKAXE",     "pickaxe", "wooden_pickaxe",    1.4, False),
-    ("FAST",      "SPEED UP 5S",       "chevron", "right",             1.0, False),
-    ("SLOW",      "SLOW DOWN 5S",      "chevron", "left",              1.0, False),
-    ("DIAMOND",   "SKIN 30S",          "pickaxe", "diamond_pickaxe",   1.0, False),
-    ("GOLD",      "SKIN 30S",          "pickaxe", "golden_pickaxe",    1.0, False),
-    ("IRON",      "SKIN 30S",          "pickaxe", "iron_pickaxe",      1.0, False),
-    ("STONE",     "SKIN 30S",          "pickaxe", "stone_pickaxe",     1.0, False),
-    ("NETHERITE", "BEST SKIN 30S",     "pickaxe", "netherite_pickaxe", 1.0, False),
+    ("TNT",       "block",   "tnt",               1.0, False),
+    ("NUKE",      "block",   "mega_tnt",          1.0, True),
+    ("BIG",       "pickaxe", "wooden_pickaxe",    1.4, False),
+    ("SPIN",      "spin",    "spin",              1.0, True),
+    ("MULTIPLY",  "multi",   "wooden_pickaxe",    1.0, True),
+    ("QUAKE",     "quake",   "quake",             1.0, True),
+    ("STORM",     "bolt",    "bolt",              1.0, True),
+    ("WATER",     "drop",    "drop",              1.0, True),
+    ("FAST",      "chevron", "right",             1.0, False),
+    ("SLOW",      "chevron", "left",              1.0, False),
+    ("DIAMOND",   "pickaxe", "diamond_pickaxe",   1.0, False),
+    ("GOLD",      "pickaxe", "golden_pickaxe",    1.0, False),
+    ("NETHERITE", "pickaxe", "netherite_pickaxe", 1.0, False),
 ]
 
 # The five pickaxe icons are near-identical silhouettes at panel size, so the
@@ -43,13 +48,25 @@ LABEL_COLORS = {
     "TNT":       (255, 255, 255),
     "NUKE":      (255, 120,  90),
     "BIG":       (255, 255, 255),
+    "SPIN":      (255, 170,  70),
+    "MULTIPLY":  (150, 220, 255),
+    "QUAKE":     (215, 165, 105),
+    "STORM":     (135, 195, 255),
+    "WATER":     ( 95, 175, 255),
     "FAST":      (130, 235, 130),
     "SLOW":      (110, 200, 240),
     "DIAMOND":   ( 85, 225, 225),
     "GOLD":      (255, 205,  60),
-    "IRON":      (225, 225, 235),
-    "STONE":     (175, 175, 175),
     "NETHERITE": (190, 145, 230),
+}
+
+
+# Skin icons are graded toward their material so five identical silhouettes
+# stop looking like one row repeated five times.
+PICKAXE_ICON_TINTS = {
+    "DIAMOND":   ( 90, 240, 240),
+    "GOLD":      (255, 205,  60),
+    "NETHERITE": (175, 130, 220),
 }
 
 
@@ -68,6 +85,117 @@ def make_chevron(direction, size, color):
                    (size - off, size * 0.85)]
         pygame.draw.polygon(surf, color, pts)
     return surf
+
+def tint_icon(surf, color):
+    """Grade an icon toward a colour. The five pickaxe skins are the same
+    silhouette at panel size -- colour is the only thing that tells them
+    apart at a glance."""
+    out = surf.copy()
+    out.fill(color, special_flags=pygame.BLEND_RGB_MULT)
+    lift = tuple(int(c * 0.22) for c in color)
+    out.fill(lift, special_flags=pygame.BLEND_RGB_ADD)
+    return out
+
+
+def outline_icon(surf, width=3, color=(0, 0, 0)):
+    """Dark halo around an icon so it reads against bright terrain.
+
+    The reference layouts get this for free by sitting icons on dark pills;
+    the panel here is transparent, so the icon carries its own contrast.
+    """
+    w, h = surf.get_size()
+    out = pygame.Surface((w + width * 2, h + width * 2), pygame.SRCALPHA)
+    silhouette = pygame.mask.from_surface(surf).to_surface(
+        setcolor=color, unsetcolor=(0, 0, 0, 0))
+    for dx in range(-width, width + 1):
+        for dy in range(-width, width + 1):
+            if dx * dx + dy * dy > width * width:
+                continue  # Round halo, not a square one.
+            out.blit(silhouette, (width + dx, width + dy))
+    out.blit(surf, (width, width))
+    return out
+
+
+def make_quake(size, color):
+    """A cracked ground line -- a zigzag fissure reads as a quake instantly."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    w = max(2, int(size * 0.11))
+    pts = [(size * 0.06, size * 0.30), (size * 0.32, size * 0.52),
+           (size * 0.18, size * 0.66), (size * 0.52, size * 0.92)]
+    pygame.draw.lines(surf, color, False, pts, w)
+    # Two side branches, so it reads as cracked rather than as a stray line.
+    pygame.draw.lines(surf, color, False,
+                      [(size * 0.32, size * 0.52), (size * 0.62, size * 0.42)], w)
+    pygame.draw.lines(surf, color, False,
+                      [(size * 0.18, size * 0.66), (size * 0.86, size * 0.60)], w)
+    return surf
+
+
+def make_drop(size, color):
+    """A water droplet: round belly, pointed top."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    r = size * 0.30
+    cx, cy = size * 0.5, size * 0.62
+    pygame.draw.circle(surf, color, (int(cx), int(cy)), int(r))
+    pygame.draw.polygon(surf, color, [(cx, size * 0.06),
+                                      (cx - r * 0.92, cy + r * 0.22),
+                                      (cx + r * 0.92, cy + r * 0.22)])
+    # Highlight, so it reads as liquid rather than a blue blob.
+    pygame.draw.circle(surf, (255, 255, 255),
+                       (int(cx - r * 0.34), int(cy - r * 0.30)), max(2, int(r * 0.22)))
+    return surf
+
+
+def make_bolt(size, color):
+    """A lightning bolt."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    pygame.draw.polygon(surf, color, [
+        (size * 0.58, size * 0.02), (size * 0.20, size * 0.55),
+        (size * 0.44, size * 0.55), (size * 0.32, size * 0.98),
+        (size * 0.82, size * 0.40), (size * 0.54, size * 0.40),
+        (size * 0.74, size * 0.02),
+    ])
+    return surf
+
+
+def make_multi(src, size):
+    """Three overlapping pickaxes -- one sprite cannot say "many"."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    small = pygame.transform.smoothscale(src, (int(size * 0.62), int(size * 0.62)))
+    for ox, oy in ((0.0, 0.34), (0.19, 0.17), (0.38, 0.0)):
+        surf.blit(small, (int(ox * size), int(oy * size)))
+    return surf
+
+
+def make_spin(size, color):
+    """A circular arrow. No pickaxe sprite can show rotation -- an arrow can,
+    and drawing it beats shipping another PNG."""
+    surf = pygame.Surface((size, size), pygame.SRCALPHA)
+    pad = size * 0.14
+    rect = pygame.Rect(pad, pad, size - 2 * pad, size - 2 * pad)
+    width = max(2, int(size * 0.14))
+    # Open arc: the gap is where the arrowhead goes.
+    pygame.draw.arc(surf, color, rect, math.radians(-40), math.radians(250), width)
+
+    # Arrowhead at the open end, pointing clockwise (the direction the axe
+    # actually spins on screen).
+    r = (size - 2 * pad) / 2
+    cx = cy = size / 2
+    a = math.radians(-40)
+    tip_a = a - math.radians(26)
+    tip = (cx + r * math.cos(tip_a), cy - r * math.sin(tip_a))
+    head = size * 0.30
+    # Perpendicular to the radius, so the barbs straddle the stroke.
+    nx, ny = math.cos(a), -math.sin(a)
+    px, py = -ny, nx
+    base = (cx + r * math.cos(a), cy - r * math.sin(a))
+    pygame.draw.polygon(surf, color, [
+        tip,
+        (base[0] + px * head * 0.5, base[1] + py * head * 0.5),
+        (base[0] - px * head * 0.5, base[1] - py * head * 0.5),
+    ])
+    return surf
+
 
 def render_text_with_outline(text, font, text_color, outline_color, outline_width=2):
     # Render the text in the main color.
@@ -123,19 +251,40 @@ class Hud:
         # Initialize a font (using the default font and size 24)
         self.font = pygame.font.Font(None, 64)
 
-        self.panel_font = pygame.font.Font(None, 46)
-        self.small_font = pygame.font.Font(None, 30)
+        self.panel_font = pygame.font.Font(None, 38)
+        self.small_ticker_font = pygame.font.Font(None, 30)
+        self.big_font = pygame.font.Font(None, 72)
 
         # Icons are cut and downscaled once here, never per frame. The atlas
         # arrives already scaled by BLOCK_SCALE_FACTOR (~7.5x).
         self.icons = {}
-        for label, _sub, cat, name, scale, _new in COMMAND_ROWS:
+        for label, cat, name, scale, _new in COMMAND_ROWS:
             px = int(ICON_SIZE * scale)
             if cat == "chevron":
                 self.icons[label] = make_chevron(name, px, (235, 235, 235))
+            elif cat == "spin":
+                self.icons[label] = make_spin(px, LABEL_COLORS["SPIN"])
+            elif cat == "quake":
+                self.icons[label] = make_quake(px, LABEL_COLORS["QUAKE"])
+            elif cat == "bolt":
+                self.icons[label] = make_bolt(px, LABEL_COLORS["STORM"])
+            elif cat == "drop":
+                self.icons[label] = make_drop(px, LABEL_COLORS["WATER"])
+            elif cat == "multi":
+                base = texture_atlas.subsurface(pygame.Rect(atlas_items["pickaxe"][name]))
+                self.icons[label] = make_multi(base, px)
             else:
                 src = texture_atlas.subsurface(pygame.Rect(atlas_items[cat][name]))
-                self.icons[label] = pygame.transform.smoothscale(src, (px, px))
+                icon = pygame.transform.smoothscale(src, (px, px))
+                # Pickaxe skins share one silhouette; tint each to its label
+                # colour so the row is identifiable without reading the text.
+                if cat == "pickaxe" and label in PICKAXE_ICON_TINTS:
+                    icon = tint_icon(icon, PICKAXE_ICON_TINTS[label])
+                self.icons[label] = icon
+
+        # Every icon gets the halo, whatever built it.
+        for label, icon in self.icons.items():
+            self.icons[label] = outline_icon(icon)
 
         # Cache all static text surfaces rendered once at init, never per frame.
         self.panel_texts = {
@@ -143,26 +292,12 @@ class Hud:
             'NEW_COMMAND_title': render_text_with_outline('NEW COMMAND', self.panel_font, (255, 215, 0), (0, 0, 0), 2),
         }
 
-        self.label_texts = {}  # label -> (label_surface, subtitle_surface)
-        for label, subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
+        self.label_texts = {}  # label -> label_surface
+        for label, _cat, _name, _scale, _new in COMMAND_ROWS:
             color = LABEL_COLORS.get(label, (255, 255, 255))
             lab = render_text_with_outline(label, self.panel_font, color, (0, 0, 0), 2)
-            sub = render_text_with_outline(subtitle, self.small_font, (195, 195, 205), (0, 0, 0), 2)
-            self.label_texts[label] = (lab, sub)
+            self.label_texts[label] = lab
 
-        # Cache filled background surfaces for panels (sized for their content).
-        commands_height = HEADER_H + len(COMMAND_ROWS) * ROW_H
-        new_rows = [r for r in COMMAND_ROWS if r[5]]
-        new_height = HEADER_H + len(new_rows) * ROW_H
-
-        self.panel_boxes = {}
-        commands_bg = pygame.Surface((PANEL_W, commands_height), pygame.SRCALPHA)
-        commands_bg.fill((12, 12, 16, 200))
-        self.panel_boxes['COMMANDS'] = commands_bg
-
-        new_bg = pygame.Surface((PANEL_W, new_height), pygame.SRCALPHA)
-        new_bg.fill((12, 12, 16, 200))
-        self.panel_boxes['NEW_COMMAND'] = new_bg
 
     def update_amounts(self, new_amounts):
         """
@@ -176,9 +311,7 @@ class Hud:
         self.amounts[key] += random.randint(lo, hi) * self.ore_multiplier
 
     def _panel_box(self, screen, x, y, w, h, title_key, accent=(255, 255, 255)):
-        # Blit cached background and title, draw border
-        box = self.panel_boxes[title_key]
-        screen.blit(box, (x, y))
+        # Transparent panel: border + outlined text only, no fill.
         pygame.draw.rect(screen, accent, (x, y, w, h), 3)
         t = self.panel_texts[title_key + '_title']
         screen.blit(t, (x + (w - t.get_width()) // 2, y + 4))
@@ -191,29 +324,25 @@ class Hud:
         screen.blit(icon, (ix, iy))
 
         tx = x + 12 + ICON_SIZE + 8
-        lab, sub = self.label_texts[label]
-        # The two lines nest tightly inside ROW_H; the overlap pulls the
-        # subtitle up into the label's outline padding rather than letting
-        # consecutive rows touch.
-        screen.blit(lab, (tx, y + 1))
-        screen.blit(sub, (tx, y + lab.get_height() - 9))
+        lab = self.label_texts[label]
+        screen.blit(lab, (tx, y + (ROW_H - lab.get_height()) // 2))
 
     def draw_command_panel(self, screen):
         height = HEADER_H + len(COMMAND_ROWS) * ROW_H
         self._panel_box(screen, PANEL_X, PANEL_Y, PANEL_W, height, 'COMMANDS')
         y = PANEL_Y + HEADER_H
-        for label, _subtitle, _cat, _name, _scale, _new in COMMAND_ROWS:
+        for label, _cat, _name, _scale, _new in COMMAND_ROWS:
             self._panel_row(screen, PANEL_X, y, label)
             y += ROW_H
 
-        new_rows = [r for r in COMMAND_ROWS if r[5]]
+        new_rows = [r for r in COMMAND_ROWS if r[4]]
         if not new_rows:
             return
         ny = PANEL_Y + height + 36
         nh = HEADER_H + len(new_rows) * ROW_H
         self._panel_box(screen, PANEL_X, ny, PANEL_W, nh, 'NEW_COMMAND', accent=(255, 215, 0))
         y = ny + HEADER_H
-        for label, _subtitle, _cat, _name, _scale, _new in new_rows:
+        for label, _cat, _name, _scale, _new in new_rows:
             self._panel_row(screen, PANEL_X, y, label)
             y += ROW_H
 
@@ -231,43 +360,126 @@ class Hud:
                                         (255, 255, 255), (0, 0, 0), 2)
         screen.blit(surf, (x + 36, y - 4))
 
+    def _ticker_panel(self, screen, color, glow):
+        """Rounded plate with an outer glow. `glow` is 0..1 pulse strength."""
+        pad = 14
+        surf = pygame.Surface((TICKER_W + pad * 2, TICKER_H + pad * 2), pygame.SRCALPHA)
+
+        # Glow: concentric rounded rects fading outward. Cheap, and it lifts
+        # the plate off the terrain instead of sitting flat on it.
+        for i in range(pad, 0, -3):
+            a = int(46 * glow * (1 - i / pad))
+            if a <= 0:
+                continue
+            pygame.draw.rect(surf, (*color, a),
+                             (pad - i, pad - i, TICKER_W + i * 2, TICKER_H + i * 2),
+                             border_radius=18 + i)
+
+        # Two-tone body: lighter at the top, so it reads as a lit surface.
+        pygame.draw.rect(surf, (26, 26, 34, 232), (pad, pad, TICKER_W, TICKER_H),
+                         border_radius=16)
+        pygame.draw.rect(surf, (44, 44, 56, 232), (pad, pad, TICKER_W, TICKER_H // 2),
+                         border_top_left_radius=16, border_top_right_radius=16)
+        pygame.draw.rect(surf, (*color, 255), (pad, pad, TICKER_W, TICKER_H),
+                         3, border_radius=16)
+        screen.blit(surf, (TICKER_X - pad, TICKER_Y - pad))
+
+    def _ticker_bar(self, screen, x, y, w, h, fraction, color):
+        """Rounded progress bar with a highlight along its top edge."""
+        pygame.draw.rect(screen, (46, 46, 56), (x, y, w, h), border_radius=h // 2)
+        filled = max(h, int(w * fraction)) if fraction > 0 else 0
+        if filled:
+            pygame.draw.rect(screen, color, (x, y, filled, h), border_radius=h // 2)
+            light = tuple(min(255, c + 55) for c in color)
+            pygame.draw.rect(screen, light, (x + 3, y + 2, max(1, filled - 6), h // 3),
+                             border_radius=h // 3)
+
     def draw_event_ticker(self, screen, events):
         """Render the active or incoming event. Nothing is drawn while idle."""
+        countdown = None
         if events.phase == "idle":
+            countdown = events.countdown_secs()
+            if countdown is None:
+                return
+
+        # Sine pulse shared by every phase, so the plate always breathes.
+        period = 1100 if countdown is not None else 600
+        t = pygame.time.get_ticks() % period
+        pulse = (math.sin(t / period * 2 * math.pi) + 1) / 2
+
+        if countdown is not None:
+            # Neutral, warming toward gold as it closes in: tension without
+            # leaking which event is coming.
+            heat = 1 - min(1.0, countdown / 15)
+            color = (int(200 + 55 * heat), int(200 - 25 * heat), int(210 - 140 * heat))
+            self._ticker_panel(screen, color, 0.35 + 0.65 * pulse * heat)
+
+            label = render_text_with_outline("NEXT EVENT", self.small_ticker_font,
+                                             (205, 205, 215), (0, 0, 0), 2)
+            screen.blit(label, (TICKER_X + 16, TICKER_Y + 10))
+
+            big = render_text_with_outline(f"{countdown}", self.big_font, color, (0, 0, 0), 3)
+            screen.blit(big, (TICKER_X + TICKER_W - big.get_width() - 18, TICKER_Y + 4))
+
+            self._ticker_bar(screen, TICKER_X + 16, TICKER_Y + TICKER_H - 26,
+                             TICKER_W - 32, 14, countdown / 15, color)
             return
 
-        box = pygame.Surface((TICKER_W, TICKER_H), pygame.SRCALPHA)
-        box.fill((12, 12, 16, 200))
-        screen.blit(box, (TICKER_X, TICKER_Y))
-        pygame.draw.rect(screen, events.color,
-                         (TICKER_X, TICKER_Y, TICKER_W, TICKER_H), 3)
-
+        color = events.color
         if events.phase == "warning":
-            # Same sine-brightness pulse the TNT fuse uses.
-            period = 600
-            t = pygame.time.get_ticks() % period
-            brightness = (math.sin(t / period * 2 * math.pi) + 1) / 2
-            col = tuple(int(c * (0.4 + 0.6 * brightness)) for c in events.color)
+            flash = tuple(int(c * (0.45 + 0.55 * pulse)) for c in color)
+            self._ticker_panel(screen, color, 0.4 + 0.6 * pulse)
             label = render_text_with_outline(f"{events.name} INCOMING",
-                                             self.panel_font, col, (0, 0, 0), 2)
-            screen.blit(label, (TICKER_X + 12, TICKER_Y + 28))
+                                             self.panel_font, flash, (0, 0, 0), 2)
+            screen.blit(label, (TICKER_X + 16,
+                                TICKER_Y + (TICKER_H - label.get_height()) // 2))
             return
 
-        label = render_text_with_outline(events.name, self.panel_font,
-                                         events.color, (0, 0, 0), 2)
-        screen.blit(label, (TICKER_X + 12, TICKER_Y + 6))
+        # Active: steady plate, name left, seconds right, drain bar beneath.
+        self._ticker_panel(screen, color, 0.25 + 0.25 * pulse)
+        label = render_text_with_outline(events.name, self.panel_font, color, (0, 0, 0), 2)
+        screen.blit(label, (TICKER_X + 16, TICKER_Y + 8))
 
         secs = (events.remaining_ms() + 999) // 1000
         secs_surf = render_text_with_outline(f"{secs}s", self.panel_font,
                                              (255, 255, 255), (0, 0, 0), 2)
         screen.blit(secs_surf,
-                    (TICKER_X + TICKER_W - secs_surf.get_width() - 12, TICKER_Y + 6))
+                    (TICKER_X + TICKER_W - secs_surf.get_width() - 18, TICKER_Y + 8))
 
-        bar_x, bar_y = TICKER_X + 12, TICKER_Y + 54
-        bar_w, bar_h = TICKER_W - 24, 22
-        pygame.draw.rect(screen, (50, 50, 58), (bar_x, bar_y, bar_w, bar_h))
-        filled = int(bar_w * (1.0 - events.progress()))
-        pygame.draw.rect(screen, events.color, (bar_x, bar_y, filled, bar_h))
+        self._ticker_bar(screen, TICKER_X + 16, TICKER_Y + TICKER_H - 30,
+                         TICKER_W - 32, 18, 1.0 - events.progress(), color)
+
+    def draw_state_overlay(self, screen, pickaxe):
+        """Screen tint and alert for the lava/water states."""
+        # Water is a real pool in the world now, so only the burn tints here.
+        if not pickaxe.overheated_until:
+            return
+        tint, color = (255, 90, 20, 46), (255, 150, 60)
+        lines = ("LAVA DAMAGED THE AXE", "POUR WATER ON IT")
+
+        overlay = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        overlay.fill(tint)
+        screen.blit(overlay, (0, 0))
+
+        # Same rounded plate as the ticker, so alerts look like one system.
+        surfaces = [render_text_with_outline(t, self.panel_font, c, (0, 0, 0), 3)
+                    for t, c in zip(lines, (color, (255, 255, 255)))]
+        w = max(s.get_width() for s in surfaces) + 48
+        h = sum(s.get_height() for s in surfaces) + 34
+        x = (screen.get_width() - w) // 2
+        y = ALERT_Y
+
+        pulse = (math.sin(pygame.time.get_ticks() / 400) + 1) / 2
+        plate = pygame.Surface((w, h), pygame.SRCALPHA)
+        plate.fill((26, 14, 10, 226))
+        screen.blit(plate, (x, y))
+        pygame.draw.rect(screen, tuple(int(c * (0.5 + 0.5 * pulse)) for c in color),
+                         (x, y, w, h), 4, border_radius=14)
+
+        ty = y + 14
+        for surf in surfaces:
+            screen.blit(surf, (x + (w - surf.get_width()) // 2, ty))
+            ty += surf.get_height()
 
     def draw(self, screen, pickaxe_y, fast_slow_active, fast_slow):
         """

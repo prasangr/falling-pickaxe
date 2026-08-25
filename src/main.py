@@ -1,6 +1,3 @@
-# ==========================================
-# MODIFIED By EXPOSUREEE
-# ==========================================
 
 import time
 import pygame
@@ -11,7 +8,7 @@ from atlas import create_texture_atlas
 from pathlib import Path
 from chunk import get_block, clean_chunks, chunks
 from constants import BLOCK_SCALE_FACTOR, BLOCK_SIZE, CHUNK_HEIGHT, CHUNK_WIDTH, INTERNAL_HEIGHT, INTERNAL_WIDTH, FRAMERATE
-from pickaxe import Pickaxe
+from pickaxe import Pickaxe, spawn_clones, despawn_clones
 from camera import Camera
 from sound import SoundManager
 from tnt import Tnt, MegaTnt
@@ -20,6 +17,8 @@ import random
 import os  # Needed for file operations
 from hud import Hud
 from events import EventManager
+import daylight
+from weather import trigger_quake, Storm, Water
 
 # Track key states
 key_t_pressed = False
@@ -30,6 +29,11 @@ tnt_queue = []
 tnt_superchat_queue = []
 fast_slow_queue = []
 big_queue = []
+spin_queue = []
+multiply_queue = []
+quake_queue = []
+storm_queue = []
+water_queue = []
 pickaxe_queue = []
 mega_tnt_queue = []
 
@@ -92,6 +96,16 @@ def check_command_file():
                     fast_slow_queue.append((user, "Slow"))
             elif command == "BIG":
                 big_queue.append(user)
+            elif command == "SPIN":
+                spin_queue.append(user)
+            elif command == "MULTIPLY":
+                multiply_queue.append(user)
+            elif command == "QUAKE":
+                quake_queue.append(user)
+            elif command == "STORM":
+                storm_queue.append(user)
+            elif command == "WATER":
+                water_queue.append(user)
             
             # --- NUKE COMMAND ---
             elif command == "NUKE":
@@ -132,7 +146,7 @@ def game():
 
     screen_size = (window_width, window_height)
     screen = pygame.display.set_mode(screen_size, pygame.RESIZABLE)
-    pygame.display.set_caption("Falling Pickaxe (Ultimate Edition) by EXPOSUREEE")
+    pygame.display.set_caption("Falling Pickaxe (Ultimate Edition)")
     
     internal_surface = pygame.Surface((INTERNAL_WIDTH, INTERNAL_HEIGHT))
 
@@ -146,6 +160,12 @@ def game():
     bg_w = int(background_image.get_width() * background_scale_factor)
     bg_h = int(background_image.get_height() * background_scale_factor)
     background_image = pygame.transform.scale(background_image, (bg_w, bg_h))
+
+    # Day/night tint. Rebuilt only when the wall-clock minute changes, so this
+    # is one surface copy a minute rather than one a frame.
+    day_night = config.get("DAY_NIGHT_ENABLED", True)
+    background_tinted = background_image
+    background_tint_minute = None
 
     # Scale Atlas
     texture_atlas = pygame.transform.scale(texture_atlas,
@@ -184,6 +204,24 @@ def game():
     last_enlarge = pygame.time.get_ticks()
     enlarge_interval = 1000 * 10
     enlarge_duration = 1000 * config["PICKAXE_ENLARGE_DURATION_SECONDS"]
+    spin_duration = 1000 * config.get("SPIN_DURATION_SECONDS", 10)
+    spin_multiplier = config.get("SPIN_DAMAGE_MULTIPLIER", 3)
+    spin_rate = config.get("SPIN_RATE_RADIANS", 12)
+    spin_gravity = config.get("SPIN_GRAVITY_MULTIPLIER", 3)
+    multiply_count = config.get("MULTIPLY_COUNT", 15)
+    multiply_duration = 1000 * config.get("MULTIPLY_DURATION_SECONDS", 8)
+    clones = []
+    clones_end_time = 0
+    quake_intensity = config.get("QUAKE_INTENSITY", 26)
+    quake_impulse = config.get("QUAKE_IMPULSE", 900)
+    storm_duration = 1000 * config.get("STORM_DURATION_SECONDS", 12)
+    storm_interval = config.get("STORM_STRIKE_INTERVAL_MS", 900)
+    storm = None
+    last_event_quake = 0
+    wet_duration = 1000 * config.get("WET_DURATION_SECONDS", 10)
+    water_width = config.get("WATER_WIDTH_BLOCKS", 3.2)
+    water_depth = config.get("WATER_DEPTH_BLOCKS", 1.2)
+    water = None
     
     fast_slow_active = False
     fast_slow = "Fast"
@@ -229,6 +267,8 @@ def game():
 
         # Logic
         pickaxe.update()
+        for clone in clones:
+            clone.update()
         camera.update(pickaxe.body.position.y)
         
         start_chunk_y = int(pickaxe.body.position.y // (CHUNK_HEIGHT * BLOCK_SIZE) - 1) - 1
@@ -237,7 +277,14 @@ def game():
 
         # Drawing
         screen.fill((0,0,0))
-        internal_surface.blit(background_image, ((INTERNAL_WIDTH - bg_w)//2, (INTERNAL_HEIGHT - bg_h)//2))
+        if day_night:
+            lt = time.localtime()
+            if lt.tm_min != background_tint_minute:
+                background_tint_minute = lt.tm_min
+                background_tinted = background_image.copy()
+                background_tinted.fill(daylight.tint_for(lt.tm_hour + lt.tm_min / 60),
+                                       special_flags=pygame.BLEND_RGB_MULT)
+        internal_surface.blit(background_tinted, ((INTERNAL_WIDTH - bg_w)//2, (INTERNAL_HEIGHT - bg_h)//2))
 
         # ------------------ SPAWN LOGIC ------------------
         curr = pygame.time.get_ticks()
@@ -307,11 +354,80 @@ def game():
                 fast_slow_active = True
                 last_fast_slow = curr
 
+            # 7. Spin Mode
+            if spin_queue:
+                spin_queue.pop(0)
+                pickaxe.spin(spin_duration, spin_multiplier, spin_rate, spin_gravity)
+
+            # 8. Multiply
+            if multiply_queue:
+                multiply_queue.pop(0)
+                if not clones:
+                    clones.extend(spawn_clones(space, pickaxe, multiply_count))
+                # Re-triggering extends rather than stacking another 15 bodies.
+                clones_end_time = curr + multiply_duration
+
+            # 9. Quake
+            if quake_queue:
+                quake_queue.pop(0)
+                trigger_quake(space, camera, quake_intensity, quake_impulse)
+
+            # 10. Storm
+            if storm_queue:
+                storm_queue.pop(0)
+                if storm is None:
+                    storm = Storm(storm_duration, storm_interval)
+                else:
+                    storm.extend(storm_duration)
+
+            # 11. Water: cures a lava burn, or pours a pool if nothing burns.
+            if water_queue:
+                water_queue.pop(0)
+                if pickaxe.douse() == "wet":
+                    water = Water(pickaxe.body.position.x, pickaxe.body.position.y,
+                                  wet_duration, water_width, water_depth)
+
         # ------------------ TIMEOUTS & REVERTS ------------------
         
         # Fast/Slow Timeout
         if fast_slow_active and curr - last_fast_slow >= (1000 * config["FAST_SLOW_DURATION_SECONDS"]):
             fast_slow_active = False
+
+        # EARTHQUAKE event: repeated jolts, so it reads as sustained shaking
+        # rather than one bump at the start.
+        if events.quake and curr - last_event_quake >= 700:
+            trigger_quake(space, camera, quake_intensity, quake_impulse)
+            last_event_quake = curr
+
+        # THUNDERSTORM event: keep a storm alive while the flag is set. The
+        # short extend means it rains out a couple of seconds after the event
+        # ends instead of stopping dead.
+        if events.storm:
+            if storm is None:
+                storm = Storm(storm_duration, storm_interval)
+            else:
+                storm.extend(2000)
+
+        # Water pool: buoyancy applies only while the axe is inside it.
+        if water is not None:
+            if water.expired():
+                water = None
+                pickaxe.submerged = False
+            else:
+                water.update(pickaxe)
+                pickaxe.submerged = water.covers(pickaxe.body.position.x,
+                                                 pickaxe.body.position.y)
+
+        # Storm: rain and lightning tick here, after the physics step.
+        if storm is not None:
+            if storm.expired():
+                storm = None
+            else:
+                storm.update(pickaxe, camera, sound_manager)
+
+        # Multiply Timeout
+        if clones and curr > clones_end_time:
+            despawn_clones(space, clones, pickaxe)
 
         # Pickaxe Auto-Revert Logic
         if pickaxe_reset_time > 0 and curr > pickaxe_reset_time:
@@ -330,6 +446,8 @@ def game():
                             b.draw(internal_surface, camera)
 
         pickaxe.draw(internal_surface, camera)
+        for clone in clones:
+            clone.draw(internal_surface, camera)
         for tnt in tnt_list:
             tnt.update(tnt_list, explosions, camera)
             tnt.draw(internal_surface, camera)
@@ -342,6 +460,14 @@ def game():
         # Zero keeps the counter hidden (see Hud.draw_sub_count). Flip
         # SHOW_SUB_COUNT to true in config.json to put it back on screen.
         hud.sub_count = stream_stats["subs"] if config.get("SHOW_SUB_COUNT", False) else 0
+        if water is not None:
+            water.draw(internal_surface, camera)
+
+        if storm is not None:
+            storm.draw(internal_surface, camera)
+
+        hud.draw_state_overlay(internal_surface, pickaxe)
+
         hud.draw(internal_surface, pickaxe.body.position.y,
                  speed_mode is not None, speed_mode or "Normal")
         hud.draw_event_ticker(internal_surface, events)

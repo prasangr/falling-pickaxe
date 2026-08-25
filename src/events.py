@@ -16,11 +16,18 @@ ACTIVE = "active"
 
 WARNING_MS = 3000
 
+# How long before an event fires the idle countdown appears. The event is
+# already chosen by then, so the countdown deliberately withholds its name --
+# the WARNING phase does the reveal.
+COUNTDOWN_MS = 15000
+
 EVENTS = [
     {"name": "ORE RUSH",    "duration_ms": 15000, "color": (255, 200,  40)},
     {"name": "TNT STORM",   "duration_ms": 12000, "color": (235,  60,  50)},
     {"name": "SLOW MOTION", "duration_ms": 10000, "color": ( 80, 210, 235)},
     {"name": "GOLD FEVER",  "duration_ms": 20000, "color": (250, 230,  90)},
+    {"name": "EARTHQUAKE",  "duration_ms": 12000, "color": (215, 165, 105)},
+    {"name": "THUNDERSTORM", "duration_ms": 15000, "color": (135, 195, 255)},
 ]
 
 # Ore-heavy world generation for the ORE RUSH event. Blocks absent from
@@ -52,6 +59,10 @@ class EventManager:
         # Flags read by the game loop each frame.
         self.speed_override = None
         self.tnt_storm = False
+        # Like tnt_storm: set here, acted on by the game loop, because quake
+        # and rain need the space and camera this module deliberately lacks.
+        self.quake = False
+        self.storm = False
 
         self._saved_noise_ranges = None
         self._schedule_next()
@@ -76,6 +87,19 @@ class EventManager:
 
     def remaining_ms(self):
         return max(0, self.phase_ends_at - self.clock())
+
+    def countdown_secs(self):
+        """Whole seconds until the next event, or None when it is too far off.
+
+        Only meaningful while idle: once WARNING starts, the ticker names the
+        event instead.
+        """
+        if self.phase != IDLE:
+            return None
+        remaining = self.remaining_ms()
+        if remaining > COUNTDOWN_MS:
+            return None
+        return (remaining + 999) // 1000
 
     def progress(self):
         """0.0 at the start of ACTIVE, 1.0 at its end. 0.0 in other phases."""
@@ -123,6 +147,10 @@ class EventManager:
             self.speed_override = "Slow"
         elif name == "GOLD FEVER":
             hud.ore_multiplier = 3
+        elif name == "EARTHQUAKE":
+            self.quake = True
+        elif name == "THUNDERSTORM":
+            self.storm = True
 
     def _restore(self, hud):
         # Everything is cleared unconditionally, not just the flag the
@@ -131,5 +159,7 @@ class EventManager:
             chunk_module.noise_ranges = self._saved_noise_ranges
             self._saved_noise_ranges = None
         self.tnt_storm = False
+        self.quake = False
+        self.storm = False
         self.speed_override = None
         hud.ore_multiplier = 1

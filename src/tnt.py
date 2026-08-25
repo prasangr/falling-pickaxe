@@ -6,6 +6,22 @@ from constants import BLOCK_SIZE
 from chunk import chunks
 from explosion import Explosion
 
+def blast(position, radius, max_damage=100):
+    """Damage every loaded block within `radius`, falling off with distance."""
+    for chunk in chunks:
+        for row in chunks[chunk]:
+            for block in row:
+                if block is None or getattr(block, "destroyed", False):
+                    continue
+
+                dx = block.body.position.x - position[0]
+                dy = block.body.position.y - position[1]
+                distance = math.hypot(dx, dy)
+
+                if distance <= radius:
+                    block.hp -= int(max_damage * (1 - (distance / radius)))
+
+
 class Tnt:
     def __init__(self, space, x, y, texture_atlas, atlas_items, sound_manager, owner_name=None, velocity=0, rotation=0, mass=70):
         print("Spawning TNT")
@@ -55,22 +71,8 @@ class Tnt:
         self.body.angle += random.choice([0.01, -0.01])
 
     def explode(self, explosions):
-        explosion_radius = 3 * BLOCK_SIZE  # Explosion radius in pixels
         self.detonated = True
-
-        for chunk in chunks:
-            for row in chunks[chunk]:
-                for block in row:
-                    if block is None or getattr(block, "destroyed", False):
-                        continue
-
-                    dx = block.body.position.x - self.body.position.x
-                    dy = block.body.position.y - self.body.position.y
-                    distance = math.hypot(dx, dy)
-
-                    if distance <= explosion_radius:
-                        damage = int(100 * (1 - (distance / explosion_radius)))
-                        block.hp -= damage
+        blast(self.body.position, 3 * BLOCK_SIZE)
 
         explosion = Explosion(self.body.position, self.texture_atlas, self.atlas_items, particle_count=20)
         explosions.append(explosion)
@@ -140,22 +142,10 @@ class MegaTnt(Tnt):
         self.shape.unsafe_set_vertices(pymunk.Poly.create_box(self.body, (width, height)).get_vertices())
 
     def explode(self, explosions):
-        explosion_radius = 3 * BLOCK_SIZE * self.scale_multiplier
         self.detonated = True
-
-        for chunk in chunks:
-            for row in chunks[chunk]:
-                for block in row:
-                    if block is None or getattr(block, "destroyed", False):
-                        continue
-
-                    dx = block.body.position.x - self.body.position.x
-                    dy = block.body.position.y - self.body.position.y
-                    distance = math.hypot(dx, dy)
-
-                    if distance <= explosion_radius:
-                        damage = int(100 * self.scale_multiplier * (1 - (distance / explosion_radius)))
-                        block.hp -= damage
+        blast(self.body.position,
+              3 * BLOCK_SIZE * self.scale_multiplier,
+              100 * self.scale_multiplier)
 
         explosion = Explosion(self.body.position, self.texture_atlas, self.atlas_items, particle_count=40)
         explosions.append(explosion)

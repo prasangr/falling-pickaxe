@@ -3,7 +3,12 @@ import math
 import pymunk
 import pymunk.autogeometry
 from chunk import chunks
-from constants import BLOCK_SIZE, CHUNK_WIDTH
+from constants import BLOCK_SIZE, CHUNK_WIDTH, FRAMERATE
+from config import config
+
+# Read here, not passed in: overheat fires from inside the collision
+# handler, which has no route back to main's config values.
+OVERHEAT_MS = 1000 * config.get("OVERHEAT_DURATION_SECONDS", 20)
 import random
 
 def rotate_point(x, y, angle):
@@ -34,6 +39,21 @@ class Pickaxe:
         self.space = space
         self.damage = damage
         self.is_enlarged = False
+
+        # Spin mode. The multiplier lives here rather than folded into
+        # self.damage because pickaxe()/random_pickaxe() reassign damage from
+        # the material table -- a skin change mid-spin would eat the boost.
+        self.damage_multiplier = 1
+        self.spin_end_time = 0
+        self.spin_rate = 0
+        self.spin_gravity = 1
+
+        # Lava/water states. Both are timestamps, both scale the same two
+        # numbers (dig damage, fall ceiling), so they compose with spin.
+        self.overheated_until = 0
+        # Set each frame by main from the water pool: buoyancy applies only
+        # while the axe is actually inside the water, not for a flat duration.
+        self.submerged = False
 
         vertices = rotate_vertices([
                     (0, 0), # A
@@ -91,7 +111,10 @@ class Pickaxe:
         block.first_hit_time = pygame.time.get_ticks()  
         block.last_heal_time = block.first_hit_time
 
-        block.hp -= self.damage  # Reduce HP when hit
+        block.hp -= self.damage * self.damage_multiplier * self.heat_factor()
+
+        if block.name == "lava":
+            self.overheat()
 
         if (block.name == "grass_block" or block.name == "dirt"):
             self.sound_manager.play_sound("grass" + str(random.randint(1, 4)))
@@ -152,9 +175,16 @@ class Pickaxe:
 
     def update(self):
         """Apply gravity, update movement, check collisions, and rotate."""
-        # Manually limit the falling speed (terminal velocity)
-        if self.body.velocity.y > 1000:
-            self.body.velocity = (self.body.velocity.x, 1000)
+        # Manually limit the falling speed (terminal velocity). Spin mode
+        # raises the ceiling too, otherwise the extra pull just saturates here
+        # and the heavier fall is invisible.
+        terminal = 1000 * (self.spin_gravity if self.spin_end_time else 1)
+        if self.overheated_until:
+            terminal *= 0.5      # Burned: the fall drags.
+        if self.submerged:
+            terminal *= 0.35     # In water: it sinks rather than falls.
+        if self.body.velocity.y > terminal:
+            self.body.velocity = (self.body.velocity.x, terminal)
 
         # --- Bounding box check for bedrock collision ---
         # Gather all vertices from all shapes, transformed to world coordinates
@@ -186,6 +216,32 @@ class Pickaxe:
             self.reset_size()
             self.is_enlarged = False
 
+        now = pygame.time.get_ticks()
+        if self.overheated_until and now > self.overheated_until:
+            self.overheated_until = 0
+        if self.submerged:
+            # Buoyancy: cancel most of gravity, the mirror of spin's extra
+            # pull, so the axe drifts down instead of dropping.
+            lift = self.space.gravity.y * 0.75 / FRAMERATE
+            self.body.velocity = (self.body.velocity.x,
+                                  self.body.velocity.y - lift)
+
+        # Spin mode: hold the angular velocity every frame, since collisions
+        # and pymunk's damping both bleed it off otherwise.
+        if self.spin_end_time:
+            if pygame.time.get_ticks() > self.spin_end_time:
+                self.spin_end_time = 0
+                self.damage_multiplier = 1
+                self.spin_gravity = 1
+                self.body.angular_velocity = 0
+            else:
+                self.body.angular_velocity = self.spin_rate
+                # Extra gravity for this body only -- raising space.gravity
+                # would drag every TNT and block down with it.
+                extra = self.space.gravity.y * (self.spin_gravity - 1) / FRAMERATE
+                self.body.velocity = (self.body.velocity.x,
+                                      self.body.velocity.y + extra)
+
     def draw(self, screen, camera):
         """Draw the pickaxe at its current position."""
         rotated_image = pygame.transform.rotate(self.texture, -math.degrees(self.body.angle))  # Convert to degrees
@@ -193,6 +249,40 @@ class Pickaxe:
         rect.y -= camera.offset_y
         rect.x -= camera.offset_x
         screen.blit(rotated_image, rect)
+
+    def heat_factor(self):
+        """0.5 while overheated, 1 otherwise. Kept separate from
+        damage_multiplier so SPIN's 3x and a lava burn stack instead of
+        overwriting each other."""
+        return 0.5 if self.overheated_until else 1.0
+
+    def overheat(self, duration=OVERHEAT_MS):
+        """Lava burn: half damage and a slower fall. Self-heals, so a quiet
+        chat can never leave the stream stuck."""
+        if not self.overheated_until:
+            print("Lava burned the pickaxe")
+        # Touching lava again refreshes the burn rather than extending it.
+        self.overheated_until = pygame.time.get_ticks() + duration
+
+    def douse(self):
+        """The !water command. Cures a burn, or floods the shaft if nothing
+        is burning -- water has to do something either way."""
+        if self.overheated_until:
+            self.overheated_until = 0
+            print("Water doused the pickaxe")
+            return "cured"
+        print("Water: pouring in")
+        return "wet"
+
+    def spin(self, duration=10000, multiplier=3, rate=12, gravity=3):
+        """Whirl the pickaxe and multiply its dig damage for `duration` ms."""
+        print("Spinning pickaxe")
+        self.spin_rate = rate
+        self.spin_gravity = gravity
+        self.damage_multiplier = multiplier
+        # Re-triggering extends rather than restarts, matching enlarge().
+        now = pygame.time.get_ticks()
+        self.spin_end_time = max(self.spin_end_time, now) + duration
 
     def enlarge(self, duration=5000):
         """Temporarily makes the pickaxe 3 times bigger with a larger hitbox."""
@@ -242,3 +332,40 @@ class Pickaxe:
             self.is_enlarged = False
 
             del self.enlarge_end_time  # Remove the enlargement timer
+
+
+def spawn_clones(space, original, count=15, spread=None):
+    """Temporary duplicate pickaxes for the MULTIPLY command.
+
+    Clones share the original's texture and damage. They are ordinary bodies,
+    so they scatter and dig their own tunnels; Pickaxe.update() clamps them to
+    the shaft walls, so none can wander out of the world.
+    """
+    spread = spread if spread is not None else BLOCK_SIZE * 4
+    clones = []
+    for _ in range(count):
+        dx = random.uniform(-spread, spread)
+        dy = -random.uniform(BLOCK_SIZE, BLOCK_SIZE * 5)
+        clone = Pickaxe(space,
+                        original.body.position.x + dx,
+                        original.body.position.y + dy,
+                        original.texture, original.sound_manager,
+                        damage=original.damage)
+        clone.body.angle = random.uniform(0, 2 * math.pi)
+        clones.append(clone)
+    return clones
+
+
+def despawn_clones(space, clones, original=None):
+    """Remove clones. Call this outside space.step(), never from a collision
+    callback -- removing bodies mid-step is how pymunk segfaults.
+
+    Every Pickaxe.__init__ rebinds the (pickaxe, block) handler, so after
+    spawning it points at the last clone. Rebinding to the original here stops
+    the real pickaxe routing its hits through a body that no longer exists.
+    """
+    for clone in clones:
+        space.remove(clone.body, *clone.shapes)
+    clones.clear()
+    if original is not None:
+        space.add_collision_handler(1, 2).post_solve = original.on_collision

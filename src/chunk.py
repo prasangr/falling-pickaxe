@@ -2,6 +2,11 @@ import pygame
 import random
 from block import Block
 from constants import BLOCK_SIZE, CHUNK_HEIGHT, CHUNK_WIDTH, SEED
+from config import config
+
+# Lava is a consequence of depth, not a hazard from block one.
+LAVA_START_CHUNK = config.get("LAVA_START_DEPTH_CHUNKS", 4)
+LAVA_CHANCE = config.get("LAVA_CHANCE", 0.045)
 
 def generate_noise_ranges(block_weights):
     """
@@ -115,6 +120,10 @@ def generate_chunk(chunk_x, chunk_y, texture_atlas, atlas_items, space):
                 row.append(Block(space, block_x, block_y, "bedrock", texture_atlas, atlas_items))
                 continue
 
+            if chunk_y >= LAVA_START_CHUNK and random.random() < LAVA_CHANCE:
+                row.append(Block(space, block_x, block_y, "lava", texture_atlas, atlas_items))
+                continue
+
             noise_value = random.uniform(-1, 1)
 
             # Block selection based on noise val
@@ -137,6 +146,27 @@ def get_block(chunk_x, chunk_y, x, y, texture_atlas, atlas_items, space):
             chunks[(chunk_x, chunk_y)] = generate_side_chunk(chunk_x, chunk_y, texture_atlas, atlas_items, space)
             
     return chunks[(chunk_x, chunk_y)][y][x]
+
+def block_at(world_x, world_y):
+    """The solid block occupying a world position, or None if it is open air.
+
+    Reads only already-loaded chunks and never generates one, so callers can
+    probe freely without dragging new terrain into existence.
+    """
+    gx = int(world_x // BLOCK_SIZE)
+    if gx < 0 or gx >= CHUNK_WIDTH:
+        return None
+
+    gy = int(world_y // BLOCK_SIZE)
+    chunk = chunks.get((0, gy // CHUNK_HEIGHT))
+    if chunk is None:
+        return None
+
+    block = chunk[gy % CHUNK_HEIGHT][gx]
+    if block is None or getattr(block, "destroyed", False):
+        return None
+    return block
+
 
 def delete_block(chunk_x, chunk_y, x, y):
     if (chunk_x, chunk_y) in chunks:

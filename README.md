@@ -46,6 +46,11 @@ that appears on screen.
 | `!tnt` | `TNT:%user%` | TNT |
 | `!nuke` | `NUKE:%user%` | NUKE |
 | `!big` | `BIG:%user%` | BIG |
+| `!spin` | `SPIN:%user%` | SPIN |
+| `!multiply` | `MULTIPLY:%user%` | MULTIPLY |
+| `!quake` | `QUAKE:%user%` | QUAKE |
+| `!storm` | `STORM:%user%` | STORM |
+| `!water` | `WATER:%user%` | WATER |
 | `!fast` | `SPEED:%user%:FAST` | FAST |
 | `!slow` | `SPEED:%user%:SLOW` | SLOW |
 | `!diamond` | `PICKAXE:%user%:DIAMOND` | DIAMOND |

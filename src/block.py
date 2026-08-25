@@ -21,6 +21,10 @@ class Block:
         if name == "bedrock":
             self.max_hp = 1000000000
             self.hp = 1000000000
+        elif name == "lava":
+            # Breaks easily; the cost is touching it, not mining it.
+            self.max_hp = 4
+            self.hp = 4
         elif name == "stone":
             self.max_hp = 10
             self.hp = 10

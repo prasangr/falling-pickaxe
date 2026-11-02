@@ -22,6 +22,18 @@ def blast(position, radius, max_damage=100):
                     block.hp -= int(max_damage * (1 - (distance / radius)))
 
 
+def nuke_blast(position, explosions, texture_atlas, atlas_items, radius, damage):
+    """The Nuke Meter payoff: one huge blast, with fire across the whole screen."""
+    blast(position, radius, damage)
+
+    # Explosion scatters within 200px, so a single one would look like a big
+    # TNT. A ring of them is what fills a phone screen.
+    center = pygame.Vector2(position)
+    for dx, dy in ((0, 0), (-350, -500), (350, -500), (-350, 500), (350, 500)):
+        explosions.append(Explosion(center + (dx, dy), texture_atlas, atlas_items,
+                                    particle_count=30))
+
+
 class Tnt:
     def __init__(self, space, x, y, texture_atlas, atlas_items, sound_manager, owner_name=None, velocity=0, rotation=0, mass=70):
         print("Spawning TNT")

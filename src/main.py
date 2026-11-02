@@ -1,4 +1,7 @@
 
+# ==========================================
+# MODIFIED By EXPOSUREEE
+# ==========================================
 import time
 import pygame
 import pymunk
@@ -11,7 +14,7 @@ from constants import BLOCK_SCALE_FACTOR, BLOCK_SIZE, CHUNK_HEIGHT, CHUNK_WIDTH,
 from pickaxe import Pickaxe, spawn_clones, despawn_clones
 from camera import Camera
 from sound import SoundManager
-from tnt import Tnt, MegaTnt
+from tnt import Tnt, MegaTnt, nuke_blast
 import threading
 import random
 import os  # Needed for file operations
@@ -19,6 +22,15 @@ from hud import Hud
 from events import EventManager
 import daylight
 from weather import trigger_quake, Storm, Water
+from nuke import NukeMeter
+from records import ClipLog, DepthRecord
+
+ROOT_DIR = Path(__file__).parent.parent
+RECORDS_PATH = ROOT_DIR / "records.json"
+LOGS_DIR = ROOT_DIR / "logs"
+
+# How long the NEW DEPTH RECORD banner stays up.
+RECORD_BANNER_MS = 4000
 
 # Track key states
 key_t_pressed = False
@@ -36,6 +48,8 @@ storm_queue = []
 water_queue = []
 pickaxe_queue = []
 mega_tnt_queue = []
+# Every command line read, drained into the Nuke Meter by the game loop.
+charge_queue = []
 
 # Live stream stats shown on the HUD. Seeded from config, incremented by
 # SUB lines, and overridden absolutely by SUBS lines.
@@ -74,6 +88,8 @@ def check_command_file():
             command = parts[0].upper()
             user = parts[1] if len(parts) > 1 else "StreamerBot"
             value = parts[2] if len(parts) > 2 else ""
+
+            charge_queue.append((command, user))
 
             if command == "TNT":
                 tnt_queue.append(user)
@@ -146,7 +162,7 @@ def game():
 
     screen_size = (window_width, window_height)
     screen = pygame.display.set_mode(screen_size, pygame.RESIZABLE)
-    pygame.display.set_caption("Falling Pickaxe (Ultimate Edition)")
+    pygame.display.set_caption("Falling Pickaxe (Ultimate Edition) by EXPOSUREEE")
     
     internal_surface = pygame.Surface((INTERNAL_WIDTH, INTERNAL_HEIGHT))
 
@@ -237,7 +253,22 @@ def game():
     )
     last_storm_spawn = pygame.time.get_ticks()
     explosions = []
-    
+
+    nuke_meter = NukeMeter(
+        capacity=config.get("NUKE_METER_CAPACITY", 100),
+        passive_per_minute=config.get("NUKE_PASSIVE_CHARGE_PER_MINUTE", 10),
+        countdown_ms=1000 * config.get("NUKE_COUNTDOWN_SECONDS", 5),
+        enabled=config.get("NUKE_METER_ENABLED", True),
+    )
+    nuke_radius = config.get("NUKE_RADIUS_BLOCKS", 12) * BLOCK_SIZE
+    nuke_damage = config.get("NUKE_DAMAGE", 1000)
+
+    depth_record = DepthRecord(RECORDS_PATH)
+    record_banner_until = 0
+    last_record_save = pygame.time.get_ticks()
+    record_save_interval = 1000 * config.get("SAVE_PROGRESS_INTERVAL_SECONDS", 30)
+    clip_log = ClipLog(LOGS_DIR / f"clips_{time.strftime('%Y-%m-%d')}.csv")
+
     # File Check Timer
     last_file_check = pygame.time.get_ticks()
     file_check_interval = 500 # Check file every 0.5 seconds
@@ -291,6 +322,23 @@ def game():
 
         events.update(hud)
 
+        if nuke_meter.update():
+            nuke_blast(pickaxe.body.position, explosions, texture_atlas, atlas_items,
+                       nuke_radius, nuke_damage)
+            # Quake first: it starts its own smaller shake, which this outranks.
+            trigger_quake(space, camera, quake_intensity, quake_impulse)
+            camera.shake(45, 60)
+            sound_manager.play_sound("tnt")
+            clip_log.log("NUKE", nuke_meter.detonated_by or "meter filled by itself")
+
+        if depth_record.update(int(pickaxe.body.position.y // BLOCK_SIZE)):
+            record_banner_until = curr + RECORD_BANNER_MS
+            clip_log.log("RECORD", f"beat the old record, now past {depth_record.best}")
+
+        if curr - last_record_save >= record_save_interval:
+            depth_record.save()
+            last_record_save = curr
+
         if events.tnt_storm and curr - last_storm_spawn >= 300:
             tnt_list.append(Tnt(space, pickaxe.body.position.x,
                                 pickaxe.body.position.y - 100,
@@ -314,7 +362,13 @@ def game():
         if config["CHAT_CONTROL"] and curr - last_file_check >= file_check_interval:
             check_command_file()
             last_file_check = curr
-            
+
+            # Charged here, not at the queues below: those pop one per tick,
+            # so a busy chat would lag the bar behind what viewers just typed.
+            while charge_queue:
+                command, u = charge_queue.pop(0)
+                nuke_meter.charge(command, u)
+
             # 1. Regular TNT
             if tnt_queue:
                 u = tnt_queue.pop(0)
@@ -471,12 +525,16 @@ def game():
         hud.draw(internal_surface, pickaxe.body.position.y,
                  speed_mode is not None, speed_mode or "Normal")
         hud.draw_event_ticker(internal_surface, events)
+        hud.draw_depth_record(internal_surface, depth_record.best, curr < record_banner_until)
+        hud.draw_nuke_meter(internal_surface, nuke_meter)
+        hud.draw_nuke_flash(internal_surface, nuke_meter)
 
         scaled_surface = pygame.transform.smoothscale(internal_surface, (window_width, window_height))
         screen.blit(scaled_surface, (0,0))
         pygame.display.flip()
         clock.tick(FRAMERATE)
 
+    depth_record.save()
     pygame.quit()
     import sys; sys.exit()
 

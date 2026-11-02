@@ -1,3 +1,4 @@
+import functools
 import math
 import pygame
 import random
@@ -19,6 +20,30 @@ TICKER_X, TICKER_Y = 32, 880
 # Centred alert banner (lava burn), high enough to clear the ticker.
 ALERT_Y = 1180
 TICKER_W, TICKER_H = 420, 90
+
+# --- Nuke Meter layout ---
+# Above the bottom fifth of the screen, which YouTube covers with the title
+# and buttons on a phone.
+METER_X, METER_Y = 40, 1330
+METER_W, METER_H = 1000, 110
+METER_COLOR = (90, 235, 90)
+METER_ARMED_COLOR = (255, 60, 40)
+
+# Below the fast/slow indicator, clear of the ticker.
+RECORD_X, RECORD_Y = 47, 805
+RECORD_COLOR = (255, 215, 0)
+RECORD_BANNER_Y = 1470
+
+NUKE_NAME_MAX = 18
+
+
+def nuke_caption(user):
+    """The line shown over the blast. Crediting the viewer is the reason they
+    keep typing, and the shot they would want to clip."""
+    if not user:
+        return "NUKE!"
+    return f"NUKED BY {user[:NUKE_NAME_MAX].upper()}"
+
 
 # (label, atlas category, atlas name, icon scale, is_new)
 # Labels deliberately carry no "!" prefix: that is Streamer.bot trigger
@@ -215,6 +240,12 @@ def render_text_with_outline(text, font, text_color, outline_color, outline_widt
     # Blit the main text in the center.
     outline_surface.blit(text_surface, (outline_width, outline_width))
     return outline_surface
+
+
+# An outlined line is dozens of font renders. The meter redraws the same few
+# strings every frame at 60fps, so it reuses them instead.
+cached_text = functools.lru_cache(maxsize=256)(render_text_with_outline)
+
 
 class Hud:
     def __init__(self, texture_atlas, atlas_items, position=(32, 32)):
@@ -448,6 +479,67 @@ class Hud:
 
         self._ticker_bar(screen, TICKER_X + 16, TICKER_Y + TICKER_H - 30,
                          TICKER_W - 32, 18, 1.0 - events.progress(), color)
+
+    def draw_nuke_meter(self, screen, meter):
+        """The shared bar. Hidden entirely when the meter is switched off."""
+        if not meter.enabled:
+            return
+
+        armed = meter.phase == "armed"
+        color = METER_ARMED_COLOR if armed else METER_COLOR
+        pulse = (math.sin(pygame.time.get_ticks() / 120) + 1) / 2
+
+        plate = pygame.Surface((METER_W, METER_H), pygame.SRCALPHA)
+        pygame.draw.rect(plate, (26, 26, 34, 225), (0, 0, METER_W, METER_H),
+                         border_radius=16)
+        screen.blit(plate, (METER_X, METER_Y))
+        border = tuple(int(c * (0.4 + 0.6 * pulse)) for c in color) if armed else color
+        pygame.draw.rect(screen, border, (METER_X, METER_Y, METER_W, METER_H), 4,
+                         border_radius=16)
+
+        title = f"NUKE IN {meter.countdown_secs()}" if armed else "NUKE METER"
+        label = cached_text(title, self.panel_font, color, (0, 0, 0), 2)
+        screen.blit(label, (METER_X + 20, METER_Y + 12))
+
+        if not armed:
+            percent = cached_text(f"{int(meter.fraction() * 100)}%",
+                                  self.panel_font, (255, 255, 255), (0, 0, 0), 2)
+            screen.blit(percent, (METER_X + METER_W - percent.get_width() - 20,
+                                  METER_Y + 12))
+
+        self._ticker_bar(screen, METER_X + 20, METER_Y + METER_H - 46,
+                         METER_W - 40, 30, meter.fraction(), color)
+
+    def draw_nuke_flash(self, screen, meter):
+        """White-out and credit on detonation. Nothing is drawn the rest of the time."""
+        flash = meter.flash()
+        if flash <= 0:
+            return
+
+        # Surface-wide alpha, not per-pixel: this covers the whole 1080x1920
+        # frame, and per-pixel blending stuttered right on the moment people clip.
+        overlay = pygame.Surface(screen.get_size())
+        overlay.fill((255, 255, 255))
+        overlay.set_alpha(int(255 * flash))
+        screen.blit(overlay, (0, 0))
+
+        caption = cached_text(nuke_caption(meter.detonated_by), self.big_font,
+                              METER_ARMED_COLOR, (0, 0, 0), 4)
+        screen.blit(caption, ((screen.get_width() - caption.get_width()) // 2,
+                              (screen.get_height() - caption.get_height()) // 2))
+
+    def draw_depth_record(self, screen, best, celebrating):
+        """The number every stream is chasing. Hidden until there is one."""
+        if not best:
+            return
+        surf = cached_text(f"RECORD {best:,}", self.font, RECORD_COLOR, (0, 0, 0), 2)
+        screen.blit(surf, (RECORD_X, RECORD_Y))
+
+        if celebrating:
+            banner = cached_text("NEW DEPTH RECORD!", self.big_font,
+                                 RECORD_COLOR, (0, 0, 0), 4)
+            screen.blit(banner, ((screen.get_width() - banner.get_width()) // 2,
+                                 RECORD_BANNER_Y))
 
     def draw_state_overlay(self, screen, pickaxe):
         """Screen tint and alert for the lava/water states."""

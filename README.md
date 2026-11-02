@@ -124,6 +124,37 @@ Tune or disable events in `config.json`:
 
 Setting `"EVENTS_ENABLED": false` disables the system and hides the ticker.
 
+### Nuke Meter
+
+Every chat command charges one shared bar on screen. When it is full, a
+5-second countdown starts, then a nuke clears the screen and credits the viewer
+who filled it.
+
+| Source | Charge |
+|---|---|
+| Any chat command | 1 |
+| `!nuke` | 5 |
+| New subscriber | 20 |
+| Super Chat | 30 |
+| Nothing at all | 10 per minute, so a quiet stream still gets a nuke every 10 minutes |
+
+No new Streamer.bot Actions are needed. Tune or disable it in `config.json`:
+`NUKE_METER_ENABLED`, `NUKE_METER_CAPACITY`, `NUKE_PASSIVE_CHARGE_PER_MINUTE`,
+`NUKE_COUNTDOWN_SECONDS`, `NUKE_RADIUS_BLOCKS` and `NUKE_DAMAGE`. Raise the
+capacity as the chat gets busier, or nukes stop feeling special.
+
+### Depth record
+
+The deepest point ever reached is saved to `records.json` and shown as
+`RECORD`, so each stream has a number to beat. A `NEW DEPTH RECORD!` banner
+appears once per stream when it falls. Delete the file to start again.
+
+### Clip log
+
+Nukes and new records are written to `logs/clips_YYYY-MM-DD.csv` with the local
+time and the time since the game started. To turn them into Shorts, work out
+each moment's position in the stream recording from those times.
+
 ### Marking a command as NEW
 
 Set the last field of a row in `COMMAND_ROWS` (`src/hud.py`) to `True` and it

@@ -618,6 +618,349 @@ def test_water_takes_the_shape_of_the_mined_hole():
         chunk_module.chunks.update(saved)
 
 
+def _meter(**kwargs):
+    import nuke
+
+    clock = FakeClock()
+    kwargs.setdefault("capacity", 100)
+    kwargs.setdefault("passive_per_minute", 0)
+    kwargs.setdefault("countdown_ms", 5000)
+    return nuke.NukeMeter(clock=clock, **kwargs), clock
+
+
+def test_chat_commands_fill_the_meter_and_arm_it():
+    import nuke
+
+    meter, _clock = _meter(capacity=3)
+    assert meter.phase == nuke.CHARGING, meter.phase
+
+    meter.charge("TNT", "alice")
+    meter.charge("TNT", "bob")
+    assert abs(meter.fraction() - 2 / 3) < 0.001, meter.fraction()
+    assert meter.phase == nuke.CHARGING, meter.phase
+
+    meter.charge("TNT", "carol")
+    assert meter.phase == nuke.ARMED, meter.phase
+    assert meter.fraction() == 1.0, meter.fraction()
+    assert meter.detonated_by == "carol", meter.detonated_by
+
+
+def test_subscribers_charge_more_than_chat_and_sync_lines_charge_nothing():
+    meter, _clock = _meter()
+    meter.charge("TNT", "a")
+    one_tnt = meter.fraction()
+
+    meter, _clock = _meter()
+    meter.charge("SUB", "a")
+    assert meter.fraction() > one_tnt, meter.fraction()
+
+    # "SUBS:system:123" is a counter sync, not a viewer doing anything.
+    meter, _clock = _meter()
+    meter.charge("SUBS", "system")
+    meter.charge("NONSENSE", "a")
+    assert meter.fraction() == 0.0, meter.fraction()
+
+
+def test_quiet_stream_still_reaches_a_nuke_from_the_passive_trickle():
+    """A small channel has an empty chat. The nuke must still happen, or the
+    centrepiece of the stream never fires for the viewers who most need it."""
+    import nuke
+
+    meter, clock = _meter(capacity=100, passive_per_minute=10)
+    clock.advance(5 * 60 * 1000)
+    meter.update()
+    assert abs(meter.fraction() - 0.5) < 0.001, meter.fraction()
+
+    clock.advance(5 * 60 * 1000)
+    meter.update()
+    assert meter.phase == nuke.ARMED, meter.phase
+    assert meter.detonated_by is None, meter.detonated_by
+
+
+def test_armed_meter_counts_down_then_detonates_exactly_once():
+    import nuke
+
+    meter, clock = _meter(capacity=1, countdown_ms=5000)
+    meter.charge("TNT", "alice")
+    assert meter.countdown_secs() == 5, meter.countdown_secs()
+
+    clock.advance(4999)
+    assert meter.update() is False
+    assert meter.countdown_secs() == 1, meter.countdown_secs()
+
+    clock.advance(1)
+    assert meter.update() is True          # The one frame the bomb goes off.
+    assert meter.phase == nuke.CHARGING, meter.phase
+    assert meter.fraction() == 0.0, meter.fraction()
+    assert meter.detonated_by == "alice", meter.detonated_by
+
+    clock.advance(1)
+    assert meter.update() is False
+
+
+def test_commands_during_the_countdown_do_not_carry_into_the_next_meter():
+    meter, clock = _meter(capacity=2, countdown_ms=5000)
+    meter.charge("TNT", "a")
+    meter.charge("TNT", "b")               # Full, now armed.
+    meter.charge("TNT", "c")
+    clock.advance(5000)
+    assert meter.update() is True
+    assert meter.fraction() == 0.0, meter.fraction()
+
+
+def test_flash_is_bright_at_detonation_then_fades_out():
+    meter, clock = _meter(capacity=1, countdown_ms=0)
+    assert meter.flash() == 0.0, meter.flash()
+
+    meter.charge("TNT", "a")
+    assert meter.update() is True
+    assert meter.flash() == 1.0, meter.flash()
+
+    clock.advance(meter.FLASH_MS // 2)
+    assert 0.0 < meter.flash() < 1.0, meter.flash()
+
+    clock.advance(meter.FLASH_MS)
+    assert meter.flash() == 0.0, meter.flash()
+
+
+def test_disabled_meter_never_arms():
+    import nuke
+
+    meter, clock = _meter(capacity=1, passive_per_minute=100, enabled=False)
+    meter.charge("TNT", "a")
+    clock.advance(10 * 60 * 1000)
+    assert meter.update() is False
+    assert meter.phase == nuke.CHARGING, meter.phase
+    assert meter.fraction() == 0.0, meter.fraction()
+
+
+def test_nuke_blast_clears_even_obsidian_and_spawns_a_bigger_explosion():
+    import chunk as chunk_module
+    import pymunk
+    import tnt
+    from constants import BLOCK_SIZE
+
+    near = FakeBlock(5 * BLOCK_SIZE, 0)
+    near.hp = 100                          # Obsidian's HP, the toughest block.
+    far = FakeBlock(50 * BLOCK_SIZE, 0)
+
+    saved = dict(chunk_module.chunks)
+    chunk_module.chunks.clear()
+    chunk_module.chunks["test"] = [[near, far]]
+    explosions = []
+    try:
+        tnt.nuke_blast(pymunk.Vec2d(0, 0), explosions, None, None,
+                       radius=12 * BLOCK_SIZE, damage=1000)
+    finally:
+        chunk_module.chunks.clear()
+        chunk_module.chunks.update(saved)
+
+    assert near.hp <= 0, near.hp
+    assert far.hp == 1000, far.hp
+    assert sum(len(e.particles) for e in explosions) > 40, explosions
+
+
+def _record_path(tmp):
+    return os.path.join(tmp, "records.json")
+
+
+def test_depth_record_survives_a_restart():
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        first = records.DepthRecord(_record_path(tmp))
+        first.update(120)
+        first.save()
+
+        second = records.DepthRecord(_record_path(tmp))
+        assert second.best == 120, second.best
+
+
+def test_depth_record_only_ever_goes_up():
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        rec = records.DepthRecord(_record_path(tmp))
+        rec.update(120)
+        rec.update(40)                     # The axe bounced back up.
+        assert rec.best == 120, rec.best
+
+
+def test_new_record_is_announced_once_and_never_on_a_first_ever_run():
+    """Announcing on every block deeper would spam the banner for the rest of
+    the stream, and with no saved record the very first block is not news."""
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        fresh = records.DepthRecord(_record_path(tmp))
+        assert fresh.update(5) is False
+        assert fresh.update(100) is False
+        fresh.save()
+
+        rec = records.DepthRecord(_record_path(tmp))
+        assert rec.update(50) is False     # Still short of the 100 to beat.
+        assert rec.update(101) is True     # Broken.
+        assert rec.update(102) is False    # Still deepening, already announced.
+        assert rec.best == 102, rec.best
+
+
+def test_corrupt_record_file_starts_from_zero_instead_of_crashing():
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(_record_path(tmp), "w") as f:
+            f.write("{not json")
+        assert records.DepthRecord(_record_path(tmp)).best == 0
+
+
+def test_save_failure_does_not_crash_the_stream():
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        # The parent is a file, so the write cannot succeed.
+        blocker = os.path.join(tmp, "blocker")
+        open(blocker, "w").close()
+        rec = records.DepthRecord(os.path.join(blocker, "records.json"))
+        rec.update(10)
+        rec.save()
+        assert rec.best == 10, rec.best
+
+
+def test_clip_log_records_when_things_happened():
+    import csv
+    import tempfile
+    import records
+
+    now = [1000.0]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "logs", "clips.csv")
+        log = records.ClipLog(path, clock=lambda: now[0])
+        now[0] = 1000.0 + 3725           # 1h 02m 05s into the session.
+        log.log("NUKE", "alice, the great")
+
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+
+    assert rows[0] == ["local_time", "session_time", "kind", "detail"], rows[0]
+    assert rows[1][1] == "01:02:05", rows[1]
+    assert rows[1][2:] == ["NUKE", "alice, the great"], rows[1]
+
+
+def test_clip_log_write_failure_does_not_crash_the_stream():
+    import tempfile
+    import records
+
+    with tempfile.TemporaryDirectory() as tmp:
+        blocker = os.path.join(tmp, "blocker")
+        open(blocker, "w").close()
+        records.ClipLog(os.path.join(blocker, "clips.csv")).log("NUKE", "a")
+
+
+def _hud_for_drawing():
+    import pygame
+    from hud import Hud
+
+    pygame.init()
+    h = Hud.__new__(Hud)
+    h.font = pygame.font.Font(None, 64)
+    h.panel_font = pygame.font.Font(None, 38)
+    h.small_ticker_font = pygame.font.Font(None, 30)
+    h.big_font = pygame.font.Font(None, 72)
+    h.position = (32, 32)
+    return h
+
+
+def _pixels(surface):
+    import pygame
+
+    return pygame.image.tobytes(surface, "RGB")
+
+
+def test_nuke_meter_is_drawn_when_enabled_and_hidden_when_disabled():
+    import pygame
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    blank = _pixels(pygame.Surface(size))
+
+    h = _hud_for_drawing()
+    on, _clock = _meter()
+    screen = pygame.Surface(size)
+    h.draw_nuke_meter(screen, on)
+    assert _pixels(screen) != blank, "meter drew nothing"
+
+    off, _clock = _meter(enabled=False)
+    screen = pygame.Surface(size)
+    h.draw_nuke_meter(screen, off)
+    assert _pixels(screen) == blank, "disabled meter still drew"
+
+
+def test_meter_clears_the_shorts_ui_at_the_bottom_of_the_screen():
+    """YouTube's title and buttons cover the bottom of a vertical video. The
+    whole point of the meter is lost if it sits under them."""
+    import pygame
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+    from hud import METER_H, METER_W, METER_X, METER_Y
+
+    assert METER_Y + METER_H <= INTERNAL_HEIGHT * 0.8, METER_Y
+    assert METER_X >= 0 and METER_X + METER_W <= INTERNAL_WIDTH, METER_X
+
+
+def test_depth_record_is_drawn_only_once_there_is_one():
+    import pygame
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    blank = _pixels(pygame.Surface(size))
+    h = _hud_for_drawing()
+
+    screen = pygame.Surface(size)
+    h.draw_depth_record(screen, best=0, celebrating=False)
+    assert _pixels(screen) == blank, "drew a record of zero"
+
+    screen = pygame.Surface(size)
+    h.draw_depth_record(screen, best=5000, celebrating=False)
+    assert _pixels(screen) != blank, "record not drawn"
+
+
+def test_new_record_banner_draws_something_extra():
+    import pygame
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    h = _hud_for_drawing()
+
+    plain = pygame.Surface(size)
+    h.draw_depth_record(plain, best=5000, celebrating=False)
+    banner = pygame.Surface(size)
+    h.draw_depth_record(banner, best=5000, celebrating=True)
+    assert _pixels(plain) != _pixels(banner), "banner drew nothing"
+
+
+def test_nuke_caption_credits_the_viewer_and_survives_long_names():
+    from hud import nuke_caption
+
+    assert nuke_caption("alice") == "NUKED BY ALICE", nuke_caption("alice")
+    assert nuke_caption(None) == "NUKE!", nuke_caption(None)
+    # A name wider than the phone screen would run off both edges.
+    assert len(nuke_caption("x" * 200)) <= len("NUKED BY ") + 18
+
+
+def test_every_command_the_game_accepts_charges_the_meter():
+    """A viewer typing a listed command and seeing the meter not move would
+    read as the game being broken."""
+    import nuke
+
+    for command in ("TNT", "SUB", "SUPER", "SPEED", "BIG", "SPIN", "MULTIPLY",
+                    "QUAKE", "STORM", "WATER", "NUKE", "PICKAXE"):
+        assert nuke.CHARGE_POINTS.get(command, 0) > 0, command
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):

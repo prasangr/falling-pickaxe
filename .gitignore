@@ -8,7 +8,11 @@ venv/
 # main.py recreates it on launch if missing.
 commands.txt
 
-# Chat logs written by youtube.py
+# The depth record carried between streams. Per-streamer, not project code.
+records.json
+records.json.tmp
+
+# Chat logs written by youtube.py, clip logs written by main.py
 logs/
 
 # Reference screenshots, not project assets

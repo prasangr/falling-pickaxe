@@ -16,6 +16,18 @@ ORE_DROPS = {
     "lapis_ore":    ("lapis_lazuli", 4, 8),
 }
 
+def remove_from_world(space, body, *shapes):
+    """Take an object out of the physics world so that it is safe to free.
+
+    Call this outside space.step(). Once removed, a shape no longer tells its
+    body it exists, so if Python frees the body first the shape is left pointing
+    at freed memory and crashes the game when it is freed in turn.
+    """
+    space.remove(body, *shapes)
+    for shape in shapes:
+        shape.body = None
+
+
 class Block:
     def __init__(self, space, x, y, name, texture_atlas, atlas_items):
         if name == "bedrock":
@@ -127,7 +139,7 @@ class Block:
         
         if self.hp <= 0 and not self.destroyed:
             self.destroyed = True
-            space.remove(self.body, self.shape)  # Remove from physics world
+            remove_from_world(space, self.body, self.shape)
 
             drop = ORE_DROPS.get(self.name)
             if drop:

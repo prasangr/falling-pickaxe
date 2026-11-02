@@ -58,6 +58,10 @@ that appears on screen.
 | `!iron` | `PICKAXE:%user%:IRON` | IRON |
 | `!stone` | `PICKAXE:%user%:STONE` | STONE |
 | `!netherite` | `PICKAXE:%user%:NETHERITE` | NETHERITE |
+| `!heli` | `HELI:%user%` | HELI |
+| `left` | `LEFT:%user%` | *(vote panel)* |
+| `mid` | `MID:%user%` | *(vote panel)* |
+| `right` | `RIGHT:%user%` | *(vote panel)* |
 | *(New Subscriber event)* | `SUB:%user%` | — |
 | *(Super Chat / Cheer event)* | `SUPER:%user%:%message%` | — |
 
@@ -155,11 +159,35 @@ Nukes and new records are written to `logs/clips_YYYY-MM-DD.csv` with the local
 time and the time since the game started. To turn them into Shorts, work out
 each moment's position in the stream recording from those times.
 
+### Helicopter
+
+A helicopter flies in, hovers while chat votes, then bombs the left, middle and
+right of the screen, hitting the winning lane with a Mega TNT. Each viewer has
+one vote and can change it. With no votes, all three lanes are bombed equally.
+
+It flies when a viewer types `!heli`, or on its own if nobody has called one for
+`HELI_AUTO_INTERVAL_SECONDS`. **Add Streamer.bot Actions for `!heli`, `left`,
+`mid` and `right`** using the command reference above; until then only the
+automatic flights run, with no voting.
+
+Tune it with `HELI_ENABLED`, `HELI_COOLDOWN_SECONDS`,
+`HELI_AUTO_INTERVAL_SECONDS` and `HELI_VOTE_SECONDS`. Stream delay eats into the
+vote, so raise `HELI_VOTE_SECONDS` if votes arrive after the bombs.
+
+### Talking pickaxe
+
+The pickaxe has a face that reacts to what is happening, and speech bubbles that
+name the viewer responsible. It also talks to itself when chat is quiet. Its
+lines are all in `LINES` in `src/voice.py`, ready to edit. `{USER}` becomes the
+viewer's name. Turn it off with `VOICE_ENABLED`, and change how often it talks to
+itself with `VOICE_IDLE_SECONDS_MIN` and `VOICE_IDLE_SECONDS_MAX`.
+
 ### Marking a command as NEW
 
 Set the last field of a row in `COMMAND_ROWS` (`src/hud.py`) to `True` and it
-also renders in the highlighted **NEW COMMAND** box. Clear the flag once it is
-no longer new — the box loses its pull if everything lives in it.
+gets a red **NEW** tag in the menu. Clear the flag once it is no longer new — the
+tag loses its pull if everything has one. A new command also needs a row in
+`COMMAND_ROWS` and a place in `MENU_GROUPS`.
 
 ### Running the self-checks
 

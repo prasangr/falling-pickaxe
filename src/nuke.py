@@ -15,6 +15,8 @@ ARMED = "armed"
 CHARGE_POINTS = {
     "TNT": 1, "SPEED": 1, "BIG": 1, "SPIN": 1, "MULTIPLY": 1,
     "QUAKE": 1, "STORM": 1, "WATER": 1, "PICKAXE": 1,
+    "LEFT": 1, "MID": 1, "RIGHT": 1,
+    "HELI": 2,
     "NUKE": 5,
     "SUB": 20,
     "SUPER": 30,

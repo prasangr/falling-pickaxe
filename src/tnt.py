@@ -2,9 +2,11 @@ import pygame
 import pymunk
 import math
 import random
+from block import remove_from_world
 from constants import BLOCK_SIZE
 from chunk import chunks
 from explosion import Explosion
+from voice import display_name
 
 def blast(position, radius, max_damage=100):
     """Damage every loaded block within `radius`, falling off with distance."""
@@ -75,7 +77,7 @@ class Tnt:
         self.spawn_time = pygame.time.get_ticks()
 
         # Owner name (nick from chat)
-        self.owner_name = owner_name
+        self.owner_name = display_name(owner_name) if owner_name else None
         self.font = pygame.font.Font(None, 70)
 
     def on_collision(self, arbiter, space, data):
@@ -91,7 +93,7 @@ class Tnt:
 
     def update(self, tnt_list, explosions, camera):
         if self.detonated:
-            self.space.remove(self.body, self.shape)
+            remove_from_world(self.space, self.body, self.shape)
             if self in tnt_list:
                 tnt_list.remove(self)
             return
@@ -164,7 +166,7 @@ class MegaTnt(Tnt):
 
     def update(self, tnt_list, explosions, camera):
         if self.detonated:
-            self.space.remove(self.body, self.shape)
+            remove_from_world(self.space, self.body, self.shape)
             if self in tnt_list:
                 tnt_list.remove(self)
             return

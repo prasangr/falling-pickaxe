@@ -2,6 +2,7 @@
 # ==========================================
 # MODIFIED By EXPOSUREEE
 # ==========================================
+import sys
 import time
 import pygame
 import pymunk
@@ -18,14 +19,22 @@ from tnt import Tnt, MegaTnt, nuke_blast
 import threading
 import random
 import os  # Needed for file operations
-from hud import Hud
+from hud import Hud, feed_label
 from events import EventManager
 import daylight
 from weather import trigger_quake, Storm, Water
-from nuke import NukeMeter
+from nuke import ARMED, NukeMeter
 from records import ClipLog, DepthRecord
+from voice import PickaxeVoice, voice_key
+import helicopter as heli_mod
+
+# Viewer names reach print() below. Unprintable ones must not raise from there:
+# that would either jam the command file or take the whole stream down.
+if sys.stdout:
+    sys.stdout.reconfigure(errors="backslashreplace")
 
 ROOT_DIR = Path(__file__).parent.parent
+COMMANDS_PATH = ROOT_DIR / "commands.txt"
 RECORDS_PATH = ROOT_DIR / "records.json"
 LOGS_DIR = ROOT_DIR / "logs"
 
@@ -48,8 +57,9 @@ storm_queue = []
 water_queue = []
 pickaxe_queue = []
 mega_tnt_queue = []
-# Every command line read, drained into the Nuke Meter by the game loop.
-charge_queue = []
+# Every command line read, drained by the game loop into everything that
+# reacts to chat: the Nuke Meter, the feed, the pickaxe and the helicopter.
+chat_queue = []
 
 # Live stream stats shown on the HUD. Seeded from config, incremented by
 # SUB lines, and overridden absolutely by SUBS lines.
@@ -63,7 +73,7 @@ def check_command_file():
     Reads 'commands.txt' for new instructions.
     Format in file: COMMAND:USER:VALUE
     """
-    cmd_file = Path(__file__).parent.parent / "commands.txt"
+    cmd_file = COMMANDS_PATH
     
     # Create file if it doesn't exist
     if not cmd_file.exists():
@@ -71,7 +81,10 @@ def check_command_file():
         return
 
     try:
-        with open(cmd_file, 'r') as f:
+        # Explicit encoding: the Windows default cannot decode some Hindi names,
+        # and a failed read here is never cleared, which would silence chat for
+        # the rest of the stream. utf-8-sig also tolerates a byte-order mark.
+        with open(cmd_file, 'r', encoding='utf-8-sig', errors='replace') as f:
             lines = f.readlines()
         
         # If file is empty, do nothing
@@ -89,7 +102,7 @@ def check_command_file():
             user = parts[1] if len(parts) > 1 else "StreamerBot"
             value = parts[2] if len(parts) > 2 else ""
 
-            charge_queue.append((command, user))
+            chat_queue.append((command, user, value))
 
             if command == "TNT":
                 tnt_queue.append(user)
@@ -269,6 +282,23 @@ def game():
     record_save_interval = 1000 * config.get("SAVE_PROGRESS_INTERVAL_SECONDS", 30)
     clip_log = ClipLog(LOGS_DIR / f"clips_{time.strftime('%Y-%m-%d')}.csv")
 
+    voice = PickaxeVoice(
+        enabled=config.get("VOICE_ENABLED", True),
+        idle_min_ms=1000 * config.get("VOICE_IDLE_SECONDS_MIN", 25),
+        idle_max_ms=1000 * config.get("VOICE_IDLE_SECONDS_MAX", 45),
+    )
+    was_armed = False
+    was_burned = False
+
+    heli_dispatcher = heli_mod.Dispatcher(
+        cooldown_ms=1000 * config.get("HELI_COOLDOWN_SECONDS", 30),
+        auto_ms=1000 * config.get("HELI_AUTO_INTERVAL_SECONDS", 240),
+        vote_ms=1000 * config.get("HELI_VOTE_SECONDS", 12),
+        enabled=config.get("HELI_ENABLED", True),
+    )
+    heli_pilot = None
+    heli_phase = None
+
     # File Check Timer
     last_file_check = pygame.time.get_ticks()
     file_check_interval = 500 # Check file every 0.5 seconds
@@ -304,7 +334,7 @@ def game():
         
         start_chunk_y = int(pickaxe.body.position.y // (CHUNK_HEIGHT * BLOCK_SIZE) - 1) - 1
         end_chunk_y = int(pickaxe.body.position.y + INTERNAL_HEIGHT) // (CHUNK_HEIGHT * BLOCK_SIZE) + 1
-        clean_chunks(start_chunk_y)
+        clean_chunks(start_chunk_y, space)
 
         # Drawing
         screen.fill((0,0,0))
@@ -330,10 +360,42 @@ def game():
             camera.shake(45, 60)
             sound_manager.play_sound("tnt")
             clip_log.log("NUKE", nuke_meter.detonated_by or "meter filled by itself")
+            voice.react("DETONATE", force=True)
+
+        is_armed = nuke_meter.phase == ARMED
+        if is_armed and not was_armed:
+            voice.react("ARMED", force=True)
+        was_armed = is_armed
 
         if depth_record.update(int(pickaxe.body.position.y // BLOCK_SIZE)):
             record_banner_until = curr + RECORD_BANNER_MS
             clip_log.log("RECORD", f"beat the old record, now past {depth_record.best}")
+            voice.react("RECORD", force=True)
+
+        is_burned = bool(pickaxe.overheated_until)
+        if is_burned and not was_burned:
+            voice.react("LAVA", force=True)
+        was_burned = is_burned
+
+        # Helicopter: the bombs are spawned here, the flight lives in its module.
+        for bomb_x, kind in heli_dispatcher.update():
+            bomb_type = MegaTnt if kind == heli_mod.MEGA else Tnt
+            tnt_list.append(bomb_type(space, bomb_x, camera.offset_y + heli_mod.FLY_Y + 70,
+                                      texture_atlas, atlas_items, sound_manager,
+                                      owner_name=heli_pilot if kind == heli_mod.MEGA else None))
+
+        heli = heli_dispatcher.active
+        new_phase = heli.phase if heli else None
+        if new_phase != heli_phase:
+            if new_phase == heli_mod.ARRIVING:
+                heli_pilot = heli.pilot
+                voice.react("HELI" if heli.pilot else "HELI_AUTO", heli.pilot, force=True)
+            elif new_phase == heli_mod.BOMBING:
+                voice.react("BOMBING", force=True)
+                clip_log.log("HELI", f"{heli.pilot or 'autopilot'} bombed {heli.winner() or 'all lanes'}")
+            heli_phase = new_phase
+
+        voice.update()
 
         if curr - last_record_save >= record_save_interval:
             depth_record.save()
@@ -363,11 +425,19 @@ def game():
             check_command_file()
             last_file_check = curr
 
-            # Charged here, not at the queues below: those pop one per tick,
-            # so a busy chat would lag the bar behind what viewers just typed.
-            while charge_queue:
-                command, u = charge_queue.pop(0)
+            # Handled here, not at the queues below: those pop one per tick, so
+            # a busy chat would lag all of this behind what viewers just typed.
+            while chat_queue:
+                command, u, value = chat_queue.pop(0)
+                label = feed_label(command, value)
                 nuke_meter.charge(command, u)
+                hud.add_feed(u, label)
+                if command == "HELI":
+                    heli_dispatcher.request(u)
+                elif command in heli_mod.LANES:
+                    heli_dispatcher.vote(u, command)
+                elif label:
+                    voice.react(voice_key(label), u)
 
             # 1. Regular TNT
             if tnt_queue:
@@ -499,7 +569,6 @@ def game():
                             b.update(space, hud)
                             b.draw(internal_surface, camera)
 
-        pickaxe.draw(internal_surface, camera)
         for clone in clones:
             clone.draw(internal_surface, camera)
         for tnt in tnt_list:
@@ -524,8 +593,16 @@ def game():
 
         hud.draw(internal_surface, pickaxe.body.position.y,
                  speed_mode is not None, speed_mode or "Normal")
+        # After the HUD: the axe is the star, and the shaft runs under the menu.
+        # Hiding it behind a panel would leave viewers watching rock.
+        pickaxe.draw(internal_surface, camera)
+        hud.draw_pickaxe_face(internal_surface, pickaxe, camera, voice)
+
         hud.draw_event_ticker(internal_surface, events)
         hud.draw_depth_record(internal_surface, depth_record.best, curr < record_banner_until)
+        hud.draw_speech_bubble(internal_surface, pickaxe, camera, voice)
+        if heli_dispatcher.active:
+            hud.draw_helicopter(internal_surface, heli_dispatcher.active)
         hud.draw_nuke_meter(internal_surface, nuke_meter)
         hud.draw_nuke_flash(internal_surface, nuke_meter)
 
@@ -536,7 +613,7 @@ def game():
 
     depth_record.save()
     pygame.quit()
-    import sys; sys.exit()
+    sys.exit()
 
 if __name__ == "__main__":
     game()

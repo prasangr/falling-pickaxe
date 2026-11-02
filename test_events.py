@@ -957,8 +957,632 @@ def test_every_command_the_game_accepts_charges_the_meter():
     import nuke
 
     for command in ("TNT", "SUB", "SUPER", "SPEED", "BIG", "SPIN", "MULTIPLY",
-                    "QUAKE", "STORM", "WATER", "NUKE", "PICKAXE"):
+                    "QUAKE", "STORM", "WATER", "NUKE", "PICKAXE",
+                    "HELI", "LEFT", "MID", "RIGHT"):
         assert nuke.CHARGE_POINTS.get(command, 0) > 0, command
+
+
+# ---------- command menu ----------
+
+def _real_hud():
+    """A real Hud, icons and all. The menu is built from them, so bypassing
+    __init__ would test nothing."""
+    from pathlib import Path
+    import pygame
+    from atlas import create_texture_atlas
+    from hud import Hud
+
+    pygame.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    assets = Path(__file__).parent / "src" / "assets"
+    atlas, items = create_texture_atlas(assets)
+    return Hud(atlas, items)
+
+
+def test_menu_lists_every_command_exactly_once():
+    """The old NEW COMMAND box repeated six rows. Each command gets one row."""
+    import hud
+
+    listed = [label for _name, _color, labels in hud.MENU_GROUPS for label in labels]
+    assert len(listed) == len(set(listed)), listed
+    assert set(listed) == {row[0] for row in hud.COMMAND_ROWS}, listed
+    assert "HELI" in listed, listed
+
+
+def test_menu_and_feed_stop_above_the_nuke_meter():
+    import hud
+
+    bottom = hud.MENU_Y + hud.menu_height() + hud.FEED_GAP + hud.FEED_H
+    assert bottom < hud.METER_Y, bottom
+    assert hud.MENU_X + hud.MENU_W <= 1080, hud.MENU_X
+
+
+def test_real_menu_draws():
+    import pygame
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    h = _real_hud()
+    screen = pygame.Surface(size)
+    h.draw_command_panel(screen)
+    assert _pixels(screen) != _pixels(pygame.Surface(size)), "menu drew nothing"
+
+
+def test_feed_shows_the_latest_three_actions():
+    """Viewers typing and seeing their own name is the point of the feed."""
+    from collections import deque
+    from hud import Hud
+
+    h = Hud.__new__(Hud)
+    h.feed = deque(maxlen=3)
+    for i in range(5):
+        h.add_feed(f"user{i}", "TNT")
+    assert [u for u, _c in h.feed] == ["USER4", "USER3", "USER2"], list(h.feed)
+
+
+def test_feed_ignores_lines_with_no_viewer_behind_them():
+    from collections import deque
+    from hud import Hud
+
+    h = Hud.__new__(Hud)
+    h.feed = deque(maxlen=3)
+    h.add_feed("system", None)
+    assert not h.feed, list(h.feed)
+
+
+def test_feed_label_names_what_the_viewer_actually_typed():
+    from hud import feed_label
+
+    assert feed_label("TNT", "") == "TNT"
+    assert feed_label("SPEED", "FAST") == "FAST"
+    assert feed_label("PICKAXE", "diamond") == "DIAMOND"
+    assert feed_label("SUB", "") == "SUB"
+    assert feed_label("SUBS", "123") is None     # A counter sync, not a viewer.
+    assert feed_label("NONSENSE", "") is None
+
+
+# ---------- talking pickaxe ----------
+
+class FixedRng:
+    """Always picks the first option, so spoken lines are predictable."""
+
+    def choice(self, seq):
+        return seq[0]
+
+    def randint(self, a, b):
+        return a
+
+
+def _voice(**kwargs):
+    import voice
+
+    clock = FakeClock()
+    kwargs.setdefault("rng", FixedRng())
+    return voice.PickaxeVoice(clock=clock, **kwargs), clock
+
+
+def test_display_name_is_safe_to_put_on_screen():
+    from voice import display_name
+
+    assert display_name("@rahul_07") == "RAHUL_07"
+    assert len(display_name("x" * 200)) <= 14
+    # The stream font has no Devanagari glyphs: this would draw as empty boxes.
+    assert display_name("राहुल") == "SOMEONE"
+    assert display_name("") == "SOMEONE"
+    assert display_name(None) == "SOMEONE"
+
+
+def test_pickaxe_speaks_the_viewers_name():
+    import voice
+
+    v, _clock = _voice()
+    voice.LINES["TEST"] = (voice.SCARED, ["{USER} WHY"])
+    v.react("TEST", "rahul")
+    assert v.line == "RAHUL WHY", v.line
+    assert v.mood == voice.SCARED, v.mood
+
+
+def test_name_containing_braces_cannot_break_the_line():
+    import voice
+
+    v, _clock = _voice()
+    voice.LINES["TEST"] = (voice.SCARED, ["{USER} WHY"])
+    v.react("TEST", "{0}{bad}")
+    assert v.line is not None, v.line
+
+
+def test_speech_bubble_expires_and_mood_returns_to_neutral():
+    import voice
+
+    v, clock = _voice()
+    v.react("TNT", "a")
+    assert v.line is not None
+    clock.advance(voice.BUBBLE_MS)
+    v.update()
+    assert v.line is None, v.line
+    assert v.mood == voice.NEUTRAL, v.mood
+
+
+def test_chat_spam_cannot_talk_over_the_current_line():
+    """In a busy chat a new line every command is unreadable flicker."""
+    import voice
+
+    v, clock = _voice()
+    v.react("TNT", "first")
+    spoken = v.line
+    clock.advance(100)
+    v.react("SPIN", "second")
+    assert v.line == spoken, v.line
+
+
+def test_big_moments_interrupt_whatever_is_being_said():
+    import voice
+
+    v, clock = _voice()
+    v.react("TNT", "a")
+    clock.advance(100)
+    v.react("DETONATE", force=True)
+    assert v.line == voice.LINES["DETONATE"][1][0], v.line
+
+
+def test_quiet_pickaxe_starts_talking_to_itself():
+    """An empty chat is exactly when the stream most needs a personality."""
+    import voice
+
+    v, clock = _voice(idle_min_ms=1000, idle_max_ms=1000)
+    clock.advance(999)
+    v.update()
+    assert v.line is None, v.line
+    clock.advance(1)
+    v.update()
+    assert v.line is not None
+
+
+def test_unknown_reaction_and_disabled_voice_stay_silent():
+    v, _clock = _voice()
+    v.react("NOT_A_KEY", "a")
+    assert v.line is None, v.line
+
+    v, clock = _voice(enabled=False, idle_min_ms=1, idle_max_ms=1)
+    v.react("TNT", "a", force=True)
+    clock.advance(10)
+    v.update()
+    assert v.line is None, v.line
+
+
+def test_every_line_fits_in_a_speech_bubble():
+    import voice
+
+    for key, (_mood, lines) in voice.LINES.items():
+        assert lines, key
+        for line in lines:
+            filled = line.replace("{USER}", "W" * voice.NAME_MAX)
+            assert len(filled) <= voice.LINE_MAX, (key, filled)
+
+
+def test_moments_nobody_caused_do_not_blame_someone():
+    """An automatic helicopter saying "SOMEONE CALLED BACKUP" is just wrong."""
+    import voice
+
+    for key in ("HELI_AUTO", "ARMED", "DETONATE", "RECORD", "BOMBING", "LAVA", "IDLE"):
+        for line in voice.LINES[key][1]:
+            assert "{USER}" not in line, (key, line)
+
+
+def test_face_stays_on_the_pick_head_as_the_axe_rotates():
+    import math
+    from hud import face_offset
+
+    x0, y0 = face_offset(0, 1)
+    assert x0 > 0 and y0 < 0, (x0, y0)                 # Up and right: the head.
+
+    x180, y180 = face_offset(math.pi, 1)
+    assert abs(x180 + x0) < 0.01 and abs(y180 + y0) < 0.01, (x180, y180)
+
+    big_x, big_y = face_offset(0, 3)                   # !big triples the sprite.
+    assert abs(big_x - 3 * x0) < 0.01 and abs(big_y - 3 * y0) < 0.01
+
+
+def test_real_face_and_bubble_draw():
+    import pygame
+    import pymunk
+    import voice
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    blank = _pixels(pygame.Surface(size))
+    h = _real_hud()
+    axe = type("Axe", (), {
+        "body": pymunk.Body(1, 1),
+        "texture": pygame.Surface((120, 120)),
+    })()
+    axe.body.position = (540, 960)
+    camera = type("Cam", (), {"offset_x": 0, "offset_y": 0})()
+
+    for mood in (voice.NEUTRAL, voice.SCARED, voice.HAPPY, voice.DIZZY):
+        v, _clock = _voice()
+        v.mood = mood
+        screen = pygame.Surface(size)
+        h.draw_pickaxe_face(screen, axe, camera, v)
+        assert _pixels(screen) != blank, mood
+
+    v, _clock = _voice()
+    screen = pygame.Surface(size)
+    h.draw_speech_bubble(screen, axe, camera, v)
+    assert _pixels(screen) == blank, "bubble drawn with nothing to say"
+
+    v.react("TNT", "a")
+    h.draw_speech_bubble(screen, axe, camera, v)
+    assert _pixels(screen) != blank, "bubble drew nothing"
+
+
+def test_long_viewer_names_stay_on_their_tnt():
+    """A long name ran off both edges of the screen, right over the menu."""
+    from pathlib import Path
+    import pygame
+    import pymunk
+    import tnt
+    from atlas import create_texture_atlas
+    from voice import NAME_MAX
+
+    pygame.init()
+    if pygame.display.get_surface() is None:
+        pygame.display.set_mode((1, 1))
+    atlas, items = create_texture_atlas(Path(__file__).parent / "src" / "assets")
+    sound = type("S", (), {"play_sound": lambda self, name: None})()
+
+    bomb = tnt.Tnt(pymunk.Space(), 0, 0, atlas, items, sound,
+                   owner_name="Prasang_NukeCraft_Fan_With_A_Very_Long_Name")
+    assert len(bomb.owner_name) <= NAME_MAX, bomb.owner_name
+
+    # Anonymous TNT stays anonymous rather than becoming "SOMEONE".
+    assert tnt.Tnt(pymunk.Space(), 0, 0, atlas, items, sound).owner_name is None
+
+
+def test_hindi_username_cannot_jam_the_command_file():
+    """On Windows the file was read as cp1252, where some UTF-8 Hindi bytes are
+    undefined. The read failed before the file was cleared, so that one line
+    failed forever and every later chat command was silently lost."""
+    import tempfile
+    from pathlib import Path
+    import main
+
+    real_path, real_queue = main.COMMANDS_PATH, list(main.chat_queue)
+    main.chat_queue.clear()
+    with tempfile.TemporaryDirectory() as tmp:
+        main.COMMANDS_PATH = Path(tmp) / "commands.txt"
+        main.COMMANDS_PATH.write_bytes("SPIN:राहुल\nTNT:alice\n".encode("utf-8"))
+        try:
+            main.check_command_file()
+            seen = [(c, u) for c, u, _v in main.chat_queue]
+            left = main.COMMANDS_PATH.read_text()
+        finally:
+            main.COMMANDS_PATH = real_path
+            main.chat_queue[:] = real_queue
+            for queue in (main.spin_queue, main.tnt_queue):
+                queue.clear()
+
+    assert seen == [("SPIN", "राहुल"), ("TNT", "alice")], seen
+    assert left == "", repr(left)
+
+
+# ---------- helicopter ----------
+
+def _heli(pilot="alice", vote_ms=10000):
+    import helicopter
+
+    clock = FakeClock()
+    return helicopter.Helicopter(pilot, vote_ms=vote_ms, clock=clock), clock
+
+
+def _fly_until(heli, clock, phase, limit_ms=120000):
+    """Advance a frame at a time, collecting every bomb dropped on the way."""
+    bombs = []
+    for _ in range(limit_ms // 16):
+        if heli.phase == phase:
+            return bombs
+        clock.advance(16)
+        bombs.extend(heli.update())
+    raise AssertionError(f"never reached {phase}, stuck in {heli.phase}")
+
+
+def test_helicopter_arrives_waits_for_the_vote_then_bombs_then_leaves():
+    import helicopter
+
+    heli, clock = _heli()
+    assert heli.phase == helicopter.ARRIVING, heli.phase
+
+    assert _fly_until(heli, clock, helicopter.VOTING) == []
+    clock.advance(9999)
+    assert heli.update() == []
+    assert heli.phase == helicopter.VOTING, heli.phase
+
+    clock.advance(1)
+    heli.update()
+    assert heli.phase == helicopter.BOMBING, heli.phase
+
+    _fly_until(heli, clock, helicopter.GONE)
+
+
+def test_helicopter_hovers_fully_on_screen_during_the_vote():
+    """The vote is when everyone is looking at it, and when they need the menu
+    to see what to type. The art is 300px wide."""
+    import helicopter
+    from hud import MENU_X
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    assert heli.x - 150 >= 0, heli.x
+    assert heli.x + 150 <= MENU_X, heli.x
+
+
+def test_viewer_gets_one_vote_and_can_change_it():
+    """Otherwise one viewer spamming LEFT decides every bombing run."""
+    import helicopter
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    heli.vote("spammer", "LEFT")
+    heli.vote("spammer", "LEFT")
+    heli.vote("spammer", "LEFT")
+    assert heli.tally() == {"LEFT": 1, "MID": 0, "RIGHT": 0}, heli.tally()
+
+    heli.vote("spammer", "RIGHT")
+    assert heli.tally() == {"LEFT": 0, "MID": 0, "RIGHT": 1}, heli.tally()
+
+
+def test_votes_only_count_during_the_vote():
+    import helicopter
+
+    heli, clock = _heli()
+    heli.vote("early", "LEFT")
+    assert sum(heli.tally().values()) == 0, heli.tally()
+
+    _fly_until(heli, clock, helicopter.VOTING)
+    clock.advance(10000)
+    heli.update()
+    heli.vote("late", "LEFT")
+    assert sum(heli.tally().values()) == 0, heli.tally()
+
+
+def _bombs_by_lane(bombs):
+    import helicopter
+
+    counts = {lane: 0 for lane in helicopter.LANES}
+    megas = {lane: 0 for lane in helicopter.LANES}
+    for x, kind in bombs:
+        lane = min(helicopter.LANES, key=lambda l: abs(helicopter.LANES[l] - x))
+        counts[lane] += 1
+        if kind == helicopter.MEGA:
+            megas[lane] += 1
+    return counts, megas
+
+
+def test_winning_lane_gets_hit_hardest():
+    import helicopter
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    heli.vote("a", "LEFT")
+    heli.vote("b", "RIGHT")
+    heli.vote("c", "RIGHT")
+    bombs = _fly_until(heli, clock, helicopter.GONE)
+
+    counts, megas = _bombs_by_lane(bombs)
+    assert counts["RIGHT"] > counts["LEFT"], counts
+    assert counts["RIGHT"] > counts["MID"], counts
+    assert counts["LEFT"] > 0 and counts["MID"] > 0, counts   # Left, mid AND right.
+    assert megas["RIGHT"] == 1, megas
+    assert megas["LEFT"] == 0 and megas["MID"] == 0, megas
+
+
+def test_empty_chat_still_gets_a_full_bombing_run():
+    import helicopter
+
+    heli, clock = _heli()
+    bombs = _fly_until(heli, clock, helicopter.GONE)
+    counts, _megas = _bombs_by_lane(bombs)
+    assert counts["LEFT"] == counts["MID"] == counts["RIGHT"] > 0, counts
+
+
+def test_tied_vote_favours_nobody():
+    import helicopter
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    heli.vote("a", "LEFT")
+    heli.vote("b", "RIGHT")
+    assert heli.winner() is None, heli.winner()
+
+
+def test_bombs_drop_inside_the_shaft_in_flight_order():
+    """A bomb outside the bedrock walls explodes where nobody can see it."""
+    import helicopter
+    from constants import BLOCK_SIZE, CHUNK_WIDTH
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    heli.vote("a", "MID")
+    bombs = _fly_until(heli, clock, helicopter.GONE)
+
+    xs = [x for x, _kind in bombs]
+    assert xs
+    assert all(BLOCK_SIZE < x < BLOCK_SIZE * (CHUNK_WIDTH - 1) for x in xs), xs
+    assert xs == sorted(xs), xs
+
+
+def _dispatcher(**kwargs):
+    import helicopter
+
+    clock = FakeClock()
+    kwargs.setdefault("cooldown_ms", 30000)
+    kwargs.setdefault("auto_ms", 240000)
+    kwargs.setdefault("vote_ms", 1000)
+    return helicopter.Dispatcher(clock=clock, **kwargs), clock
+
+
+def _run_dispatcher_until_clear(dispatcher, clock):
+    for _ in range(200000 // 16):
+        if dispatcher.active is None:
+            return
+        clock.advance(16)
+        dispatcher.update()
+    raise AssertionError("helicopter never left")
+
+
+def test_heli_spam_only_launches_one():
+    d, _clock = _dispatcher()
+    assert d.request("first") is True
+    first = d.active
+    assert d.request("second") is False
+    assert d.active is first
+    assert d.active.pilot == "first", d.active.pilot
+
+
+def test_heli_has_a_cooldown_after_it_leaves():
+    d, clock = _dispatcher()
+    d.request("a")
+    _run_dispatcher_until_clear(d, clock)
+
+    assert d.request("b") is False
+    clock.advance(30000)
+    assert d.request("b") is True
+
+
+def test_quiet_stream_still_gets_a_helicopter():
+    d, clock = _dispatcher(auto_ms=240000)
+    clock.advance(239999)
+    d.update()
+    assert d.active is None
+    clock.advance(1)
+    d.update()
+    assert d.active is not None
+    assert d.active.pilot is None, d.active.pilot
+
+
+def test_chat_summoning_a_helicopter_resets_the_auto_timer():
+    d, clock = _dispatcher(auto_ms=240000)
+    clock.advance(200000)
+    d.request("a")
+    _run_dispatcher_until_clear(d, clock)
+    clock.advance(1000)
+    d.update()
+    assert d.active is None, "auto heli fired straight after a chat one"
+
+
+def test_votes_with_no_helicopter_up_are_ignored():
+    d, _clock = _dispatcher()
+    d.vote("a", "LEFT")                     # Must not raise.
+    assert d.active is None
+
+
+def test_disabled_dispatcher_never_flies():
+    d, clock = _dispatcher(enabled=False)
+    assert d.request("a") is False
+    clock.advance(10_000_000)
+    d.update()
+    assert d.active is None
+
+
+def test_real_helicopter_and_vote_panel_draw():
+    import pygame
+    import helicopter
+    from constants import INTERNAL_HEIGHT, INTERNAL_WIDTH
+
+    size = (INTERNAL_WIDTH, INTERNAL_HEIGHT)
+    blank = _pixels(pygame.Surface(size))
+    h = _hud_for_drawing()
+
+    heli, clock = _heli()
+    _fly_until(heli, clock, helicopter.VOTING)
+    heli.vote("a", "LEFT")
+    screen = pygame.Surface(size)
+    h.draw_helicopter(screen, heli)
+    assert _pixels(screen) != blank, "helicopter drew nothing"
+
+    # Autopilot has no name to show, and that must not crash the stream.
+    heli, clock = _heli(pilot=None)
+    _fly_until(heli, clock, helicopter.VOTING)
+    h.draw_helicopter(pygame.Surface(size), heli)
+
+
+def test_blocks_the_pickaxe_has_passed_leave_the_physics_world():
+    import pygame
+    import pymunk
+    import chunk
+    from block import Block
+
+    atlas = pygame.Surface((64, 64))
+    items = {"block": {"stone": pygame.Rect(0, 0, 16, 16)}}
+    space = pymunk.Space()
+
+    def stone():
+        return Block(space, 0, 0, "stone", atlas, items)
+
+    # A mined block has already left the world; removing it twice would crash.
+    mined = stone()
+    mined.hp = 0
+    mined.update(space, None)
+
+    untouched = stone()
+    passed = [[untouched, mined, None]]
+    ahead = [[stone(), stone()]]
+    saved = dict(chunk.chunks)
+    chunk.chunks.clear()
+    chunk.chunks.update({(0, 3): passed, (0, 4): ahead})
+    try:
+        chunk.clean_chunks(4, space)
+        assert list(chunk.chunks) == [(0, 4)], list(chunk.chunks)
+        assert len(space.shapes) == 2, f"{len(space.shapes)} shapes left, expected the 2 ahead"
+        assert len(space.bodies) == 2, f"{len(space.bodies)} bodies left, expected the 2 ahead"
+        assert untouched.shape.body is None, "passed block's shape still points at its body"
+        assert mined.shape.body is None, "mined block's shape still points at its body"
+    finally:
+        chunk.chunks.clear()
+        chunk.chunks.update(saved)
+
+
+def _thing_in_space(space):
+    import pymunk
+
+    body = pymunk.Body(1, 1)
+    shape = pymunk.Circle(body, 5)
+    space.add(body, shape)
+    return body, shape
+
+
+def test_detonated_tnt_lets_go_of_its_body():
+    # A shape still pointing at a freed body crashes the whole game, with no
+    # error message, when Python later frees the shape.
+    import pymunk
+    import tnt
+
+    for cls in (tnt.Tnt, tnt.MegaTnt):
+        space = pymunk.Space()
+        bomb = cls.__new__(cls)
+        bomb.space = space
+        bomb.detonated = True
+        bomb.body, bomb.shape = _thing_in_space(space)
+        bombs = [bomb]
+        bomb.update(bombs, [], None)
+        assert bombs == [], cls
+        assert bomb.shape.body is None, f"{cls.__name__} shape still points at its body"
+        assert len(space.shapes) == 0, cls
+
+
+def test_despawned_clones_let_go_of_their_body():
+    from types import SimpleNamespace
+    import pymunk
+    import pickaxe
+
+    space = pymunk.Space()
+    body, shape = _thing_in_space(space)
+    clones = [SimpleNamespace(body=body, shapes=[shape])]
+    pickaxe.despawn_clones(space, clones)
+    assert clones == []
+    assert shape.body is None, "clone shape still points at its body"
+    assert len(space.shapes) == 0
 
 
 if __name__ == "__main__":

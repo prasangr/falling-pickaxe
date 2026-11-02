@@ -2,6 +2,7 @@ import pygame
 import math
 import pymunk
 import pymunk.autogeometry
+from block import remove_from_world
 from chunk import chunks
 from constants import BLOCK_SIZE, CHUNK_WIDTH, FRAMERATE
 from config import config
@@ -365,7 +366,7 @@ def despawn_clones(space, clones, original=None):
     the real pickaxe routing its hits through a body that no longer exists.
     """
     for clone in clones:
-        space.remove(clone.body, *clone.shapes)
+        remove_from_world(space, clone.body, *clone.shapes)
     clones.clear()
     if original is not None:
         space.add_collision_handler(1, 2).post_solve = original.on_collision

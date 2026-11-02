@@ -1,6 +1,6 @@
 import pygame
 import random
-from block import Block
+from block import Block, remove_from_world
 from constants import BLOCK_SIZE, CHUNK_HEIGHT, CHUNK_WIDTH, SEED
 from config import config
 
@@ -174,7 +174,12 @@ def delete_block(chunk_x, chunk_y, x, y):
         del chunks[(chunk_x, chunk_y)][y][x]
         chunks[(chunk_x, chunk_y)][y][x] = None
 
-def clean_chunks(start_chunk_y):
+def clean_chunks(start_chunk_y, space):
     for (chunk_x, chunk_y) in list(chunks.keys()):
         if chunk_y < start_chunk_y:
+            # Mined blocks already left the physics world, and removing one twice crashes.
+            for row in chunks[(chunk_x, chunk_y)]:
+                for block in row:
+                    if block is not None and not block.destroyed:
+                        remove_from_world(space, block.body, block.shape)
             del chunks[(chunk_x, chunk_y)]
